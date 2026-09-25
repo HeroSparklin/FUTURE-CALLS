@@ -3,36 +3,43 @@ import os, requests, random
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# --- 50 COINS - BTC + ALT + MEME ---
 coins = [
-    # TOP 10
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "SHIBUSDT", "DOTUSDT",
-    # ALT COINS
     "LINKUSDT", "TRXUSDT", "POLUSDT", "LTCUSDT", "BCHUSDT",
     "UNIUSDT", "XLMUSDT", "ETCUSDT", "FILUSDT", "ATOMUSDT",
     "HBARUSDT", "VETUSDT", "ICPUSDT", "NEARUSDT", "APTUSDT",
     "ARBUSDT", "OPUSDT", "SUIUSDT", "ENAUSDT", "TAOUSDT",
     "INJUSDT", "RNDRUSDT", "FETUSDT", "ARUSDT", "SEIUSDT",
     "WLDUSDT", "TIAUSDT", "STXUSDT", "IMXUSDT", "AAVEUSDT",
-    # MEME COINS 🔥
     "PEPEUSDT", "WIFUSDT", "BONKUSDT", "FLOKIUSDT", "MEMEUSDT",
-    "1000PEPEUSDT", "1000BONKUSDT", "BRETTUSDT", "POPCATUSDT", "PNUTUSDT"
+    "BRETTUSDT", "POPCATUSDT", "PNUTUSDT", "1000PEPEUSDT", "1000BONKUSDT"
 ]
 
-# Fix for 1000PEPE type (price will show correctly)
 coin = random.choice(coins)
 direction = random.choice(["LONG", "SHORT"])
 leverage = random.choice(["5x", "10x", "15x", "20x", "25x"])
 
-# --- GET REAL PRICE ---
+# --- FIXED PRICE FETCH - USE FUTURES API ---
+entry_price = 0
 try:
-    price_data = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={coin}").json()
-    entry_price = float(price_data['price'])
+    # Try Futures API (works on GitHub)
+    r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={coin}", timeout=10)
+    entry_price = float(r.json()['price'])
 except:
-    entry_price = 0.1234
+    try:
+        # Backup API
+        r = requests.get(f"https://data-api.binance.vision/api/v3/ticker/price?symbol={coin}", timeout=10)
+        entry_price = float(r.json()['price'])
+    except:
+        entry_price = 0
 
-# --- CALCULATE ---
+if entry_price == 0:
+    # If both fail, skip this run and pick BTC as backup
+    coin = "BTCUSDT"
+    r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={coin}", timeout=10)
+    entry_price = float(r.json()['price'])
+
 if direction == "LONG":
     tp1 = entry_price * 1.01
     tp2 = entry_price * 1.02
@@ -46,35 +53,31 @@ else:
     sl = entry_price * 1.03
     emoji = "🔴 SHORT"
 
-# Format price (if price < 1, show 6 decimals)
-if entry_price < 1:
-    fmt = ".6f"
-else:
-    fmt = ".3f"
+fmt = ".6f" if entry_price < 1 else ".2f" if entry_price > 100 else ".4f"
 
 signal = f"""
-🚀 **FUTURE CALLS - Herocallss** 🚀
+🚀 FUTURE CALLS - Herocallss 🚀
 ━━━━━━━━━━━━━━━━━━━━
 
-🪙 **Coin:** `{coin}` {'🐶 MEME' if 'PEPE' in coin or 'BONK' in coin or 'WIF' in coin or 'FLOKI' in coin or 'MEME' in coin or 'BRETT' in coin or 'POPCAT' in coin or 'PNUT' in coin else '💎 ALT' if coin not in ['BTCUSDT','ETHUSDT','BNBUSDT'] else '👑 TOP'}
-📊 **Signal:** {emoji}
-⚡️ **Leverage:** {leverage} Isolated
+🪙 Coin: {coin}
+📊 Signal: {emoji}
+⚡️ Leverage: {leverage} Isolated
 
-💰 **Entry:** `{entry_price:{fmt}}`
+💰 Entry: {entry_price:{fmt}}
 
-📈 **Take Profits:**
-TP1: `{tp1:{fmt}}` (+1%)
-TP2: `{tp2:{fmt}}` (+2%)
-TP3: `{tp3:{fmt}}` (+4%)
+📈 Take Profits:
+TP1: {tp1:{fmt}} (+1%)
+TP2: {tp2:{fmt}} (+2%)
+TP3: {tp3:{fmt}} (+4%)
 
-🛑 **Stop Loss:** `{sl:{fmt}}`
+🛑 Stop Loss: {sl:{fmt}}
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Use 1-2% risk per trade.
-
 🔗 @Herocallss
 """
 
 url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-r = requests.post(url, json={"chat_id": CHAT_ID, "text": signal, "parse_mode": "Markdown"})
+r = requests.post(url, json={"chat_id": CHAT_ID, "text": signal})
 print(r.text)
+print(f"PRICE FETCHED: {entry_price} for {coin}")
