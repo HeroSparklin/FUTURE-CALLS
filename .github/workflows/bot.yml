@@ -1,22 +1,4 @@
-name: Future Calls Bot
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
-  schedule:
-    - cron: '*/5 * * * *'
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install deps
-        run: pip install -r requirements.txt
-      - name: Run bot
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python bot.py
+- name: Install deps
+  run: |
+    python -m pip install --upgrade pip
+    pip install ccxt pandas requests python-telegram-bot
