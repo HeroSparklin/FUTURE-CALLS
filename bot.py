@@ -6,8 +6,8 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-BINANCE_VISION_URL = "https://api.binance.com/api/v3/klines"
-BINANCE_TICKER_URL = "https://api.binance.com/api/v3/exchangeInfo"
+# FIXED: Use vision endpoint that works from GitHub Actions (US servers)
+BINANCE_VISION_URL = "https://data-api.binance.vision/api/v3/klines"
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -21,20 +21,12 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Test that GitHub -> Telegram works
-send_telegram("✅ *FUTURE-CALLS bot is ONLINE*\nFilters active. Will alert when signal found.")
+# Test message to prove GitHub -> Telegram works
+send_telegram("✅ *FUTURE-CALLS bot is ONLINE*\nFixed Binance 451 error. Filters active.")
 
 def get_futures_symbols():
-    try:
-        # USDT perpetual futures-like pairs on spot API
-        r = requests.get(BINANCE_TICKER_URL, timeout=10)
-        r.raise_for_status()
-        symbols = [s["symbol"] for s in r.json()["symbols"] if s["symbol"].endswith("USDT") and s["status"]=="TRADING"]
-        # To make it faster, scan top 80 only
-        return symbols[:80]
-    except Exception as e:
-        print(f"Error getting symbols: {e}")
-        return ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT"]
+    # Hardcoded to avoid 451 error on exchangeInfo
+    return ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","TRXUSDT","DOTUSDT","MATICUSDT","SHIBUSDT","UNIUSDT","PEPEUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT","ENAUSDT","WIFUSDT","BONKUSDT"]
 
 def check_signal(symbol):
     try:
@@ -66,10 +58,10 @@ def check_signal(symbol):
         vol_avg = sum(volumes[-20:]) / 20
         last_vol = volumes[-1]
 
-        # STRICT LONG: EMA9>EMA21>EMA50 + RSI 55-70 + high volume
+        # STRICT LONG
         if ema9 > ema21 > ema50 and 55 < rsi < 70 and last_vol > vol_avg * 1.2:
             return "LONG"
-        # STRICT SHORT: EMA9<EMA21<EMA50 + RSI 30-45 + high volume
+        # STRICT SHORT
         if ema9 < ema21 < ema50 and 30 < rsi < 45 and last_vol > vol_avg * 1.2:
             return "SHORT"
         return None
@@ -86,16 +78,15 @@ symbols = get_futures_symbols()
 found = 0
 for sym in symbols:
     signal = check_signal(sym)
+    print(f"Checked {sym}: {signal}")
     if signal:
         found += 1
-        msg = f"🚀 *FUTURE-CALL: {sym}* - {signal}\nInterval: 15m\nStrict filters passed ✅\nTime: {time.strftime('%Y-%m-%d %H:%M UTC')}"
+        msg = f"🚀 *FUTURE-CALL: {sym}* - {signal}\nInterval: 15m\nStrict filters passed ✅"
         print(msg)
         send_telegram(msg)
-        time.sleep(1) # avoid telegram flood
+        time.sleep(1)
 
 if found == 0:
     print("No strict signals found this run - that's normal.")
-    # Uncomment next line if you want a message even when nothing found
-    # send_telegram("Scan complete - no 80% signals found this hour.")
 
 print(f"Done. Found {found} calls.")
