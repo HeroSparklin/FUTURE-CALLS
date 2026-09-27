@@ -1,13 +1,24 @@
+import ccxt
+import requests
+import time
+
+COINS = [
+    "BTCUSDT", "ETHUSDT", ... # all your 105 coins
+    "ASTUSDT", "MNTUSDT",
+    "EURUSDT", "GBPUSDT", "AUDUSDT", "TRYUSDT", "BRLUSDT", "NGNUSDT", "EURGBP", "EURTRY", "GBPUSDC", "EURBUSD"
+]
+
+# NOW you can print
 print(f"Scanning {len(COINS)} coins...")
+
+def send_telegram(msg):
+    ...
+
+def check_signal(symbol):
+    ...
+
+# scan once - no while True for GitHub
 found = 0
 for coin in COINS:
-    signal = check_signal(coin)
-    if signal:
-        send_telegram(f"{signal} {coin} - 80% strict - 10x")
-        found += 1
-    time.sleep(0.3)
-
-if found == 0:
-    print("No perfect setup found - protecting account")
-    
+    ...
 print("Done")
