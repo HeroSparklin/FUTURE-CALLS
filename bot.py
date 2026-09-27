@@ -1,12 +1,12 @@
-import ccxt
 import requests
 import os
+import time
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# USE BYBIT - NOT BLOCKED ON GITHUB LIKE BINANCE
-EXCHANGE = ccxt.bybit({'enableRateLimit': True})
+# This URL works on GitHub US - not blocked like normal Binance
+BINANCE_VISION_URL = "https://data-api.binance.vision/api/v3/klines"
 
 COINS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "SHIBUSDT", "DOTUSDT",
@@ -20,45 +20,35 @@ COINS = [
     "WIFUSDT", "1000SATSUSDT", "ORDIUSDT", "JUPUSDT", "STRKUSDT", "WUSDT", "ARKMUSDT", "PIXELUSDT", "PORTALUSDT", "ACEUSDT",
     "NFPUSDT", "AIUSDT", "XAIUSDT",
     "ASTUSDT", "MNTUSDT",
-    "EURUSDT", "GBPUSDT", "AUDUSDT", "TRYUSDT", "BRLUSDT", "NGNUSDT", "EURGBP", "EURTRY", "GBPUSDC", "EURBUSD"
+    "EURUSDT", "GBPUSDT", "AUDUSDT", "TRYUSDT", "BRLUSDT"
 ]
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"TELEGRAM (no secrets set): {msg}")
+        print(msg)
         return
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
         print(f"Sent: {msg}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
 def check_signal(symbol):
     try:
-        # Bybit format is BTC/USDT - convert BTCUSDT -> BTC/USDT
-        if "/" not in symbol:
-            # Handle 1000SATSUSDT etc
-            if symbol.endswith("USDT"):
-                base = symbol.replace("USDT", "")
-                market = f"{base}/USDT"
-            else:
-                market = symbol
-        else:
-            market = symbol
+        # Skip forex like EURGBP which binance.vision doesn't have
+        if symbol in ["EURGBP", "EURTRY", "GBPUSDC", "EURBUSD", "NGNUSDT"]:
+            return None
 
-        # Try with :USDT for futures style if needed
-        try:
-            ohlcv = EXCHANGE.fetch_ohlcv(market, timeframe='15m', limit=50)
-        except:
-            ohlcv = EXCHANGE.fetch_ohlcv(f"{market}:USDT", timeframe='15m', limit=50)
-
-        closes = [c[4] for c in ohlcv]
+        params = {"symbol": symbol, "interval": "15m", "limit": 50}
+        r = requests.get(BINANCE_VISION_URL, params=params, timeout=10)
+        r.raise_for_status()
+        klines = r.json()
+        closes = [float(k[4]) for k in klines]
         if len(closes) < 21:
             return None
         ema9 = sum(closes[-9:]) / 9
         ema21 = sum(closes[-21:]) / 21
-        if ema9 > ema21 * 1.001: # 80% strict filter
+        if ema9 > ema21 * 1.001:
             return "LONG"
         if ema9 < ema21 * 0.999:
             return "SHORT"
@@ -74,6 +64,7 @@ for coin in COINS:
     if sig:
         send_telegram(f"{sig} {coin} - Perfect EMA setup - 80% strict - 10x")
         found += 1
+    time.sleep(0.2) # avoid rate limit
 
 if found == 0:
     print("No perfect setup found - protecting account")
