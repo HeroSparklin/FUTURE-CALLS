@@ -2,11 +2,11 @@ import ccxt
 import requests
 import os
 
-# --- TELEGRAM FROM SECRETS ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-BINANCE = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
+# USE BYBIT - NOT BLOCKED ON GITHUB LIKE BINANCE
+EXCHANGE = ccxt.bybit({'enableRateLimit': True})
 
 COINS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "SHIBUSDT", "DOTUSDT",
@@ -24,25 +24,43 @@ COINS = [
 ]
 
 def send_telegram(msg):
-    if not TELEGRAM_TOKEN:
-        print(msg)
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"TELEGRAM (no secrets set): {msg}")
         return
     try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+        print(f"Sent: {msg}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
 def check_signal(symbol):
     try:
-        ohlcv = BINANCE.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+        # Bybit format is BTC/USDT - convert BTCUSDT -> BTC/USDT
+        if "/" not in symbol:
+            # Handle 1000SATSUSDT etc
+            if symbol.endswith("USDT"):
+                base = symbol.replace("USDT", "")
+                market = f"{base}/USDT"
+            else:
+                market = symbol
+        else:
+            market = symbol
+
+        # Try with :USDT for futures style if needed
+        try:
+            ohlcv = EXCHANGE.fetch_ohlcv(market, timeframe='15m', limit=50)
+        except:
+            ohlcv = EXCHANGE.fetch_ohlcv(f"{market}:USDT", timeframe='15m', limit=50)
+
         closes = [c[4] for c in ohlcv]
         if len(closes) < 21:
             return None
         ema9 = sum(closes[-9:]) / 9
         ema21 = sum(closes[-21:]) / 21
-        if ema9 > ema21:
+        if ema9 > ema21 * 1.001: # 80% strict filter
             return "LONG"
-        if ema9 < ema21:
+        if ema9 < ema21 * 0.999:
             return "SHORT"
         return None
     except Exception as e:
@@ -59,4 +77,4 @@ for coin in COINS:
 
 if found == 0:
     print("No perfect setup found - protecting account")
-print("Done")
+print(f"Done. Found {found} signals")
