@@ -6,7 +6,7 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# FIXED: Use vision endpoint that works from GitHub Actions (US servers)
+# Fixed endpoint that works from GitHub Actions
 BINANCE_VISION_URL = "https://data-api.binance.vision/api/v3/klines"
 
 def send_telegram(message):
@@ -21,11 +21,8 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Test message to prove GitHub -> Telegram works
-send_telegram("✅ *FUTURE-CALLS bot is ONLINE*\nFixed Binance 451 error. Filters active.")
-
 def get_futures_symbols():
-    # Hardcoded to avoid 451 error on exchangeInfo
+    # Top USDT pairs to scan
     return ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","TRXUSDT","DOTUSDT","MATICUSDT","SHIBUSDT","UNIUSDT","PEPEUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT","ENAUSDT","WIFUSDT","BONKUSDT"]
 
 def check_signal(symbol):
@@ -58,10 +55,10 @@ def check_signal(symbol):
         vol_avg = sum(volumes[-20:]) / 20
         last_vol = volumes[-1]
 
-        # STRICT LONG
+        # STRICT LONG: EMA9>EMA21>EMA50 + RSI 55-70 + high volume
         if ema9 > ema21 > ema50 and 55 < rsi < 70 and last_vol > vol_avg * 1.2:
             return "LONG"
-        # STRICT SHORT
+        # STRICT SHORT: EMA9<EMA21<EMA50 + RSI 30-45 + high volume
         if ema9 < ema21 < ema50 and 30 < rsi < 45 and last_vol > vol_avg * 1.2:
             return "SHORT"
         return None
@@ -70,12 +67,13 @@ def check_signal(symbol):
         return None
 
 # === MAIN ===
-print(f"TELEGRAM_TOKEN: {'***' if TELEGRAM_TOKEN else 'MISSING'}")
-print(f"TELEGRAM_CHAT_ID: {'***' if TELEGRAM_CHAT_ID else 'MISSING'}")
-print("Scanning coins...")
+print("Bot starting...")
+print(f"TELEGRAM_TOKEN: {'OK' if TELEGRAM_TOKEN else 'MISSING'}")
+print(f"TELEGRAM_CHAT_ID: {'OK' if TELEGRAM_CHAT_ID else 'MISSING'}")
 
 symbols = get_futures_symbols()
 found = 0
+
 for sym in symbols:
     signal = check_signal(sym)
     print(f"Checked {sym}: {signal}")
@@ -87,6 +85,6 @@ for sym in symbols:
         time.sleep(1)
 
 if found == 0:
-    print("No strict signals found this run - that's normal.")
+    print("No strict signals found this run - normal for strict filters.")
 
-print(f"Done. Found {found} calls.")
+print(f"Scan done. Found {found} calls.")
