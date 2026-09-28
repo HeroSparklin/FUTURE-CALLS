@@ -3,17 +3,8 @@ import ccxt
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+BINANCE = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
 
-if not TOKEN or not CHAT_ID:
-    print("ERROR: BOT_TOKEN or CHAT_ID missing in GitHub Secrets")
-    exit(1)
-
-BINANCE = ccxt.binance({
-    'enableRateLimit': True,
-    'options': {'defaultType': 'future'}
-})
-
-# 105 COINS
 COINS = [
     "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","SHIBUSDT","DOTUSDT",
     "LINKUSDT","TRXUSDT","MATICUSDT","LTCUSDT","BCHUSDT","NEARUSDT","UNIUSDT","PEPEUSDT","APTUSDT","ETCUSDT",
@@ -28,56 +19,29 @@ COINS = [
     "NGNUSDT","EURGBP","EURTRY","GBPUSDC","EURBUSD"
 ]
 
-def send_telegram(msg):
+def send(msg):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try:
-        r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-        print(r.text)
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
 
-def check_signal(symbol):
+def check(symbol):
     try:
         ohlcv = BINANCE.fetch_ohlcv(symbol, timeframe='15m', limit=50)
-        if len(ohlcv) < 22:
-            return None
         closes = [c[4] for c in ohlcv]
         entry = closes[-1]
-        ema_fast = sum(closes[-9:]) / 9
-        ema_slow = sum(closes[-21:]) / 21
-
-        # STRICT 80% SHORT FILTER - only send when bearish
-        if ema_fast < ema_slow:
-            tp1 = entry * 0.992 # -0.8%
-            tp2 = entry * 0.985 # -1.5%
-            tp3 = entry * 0.97 # -3.0%
-            sl = entry * 1.03 # +3.0%
-
-            return (
-                f"🚀 FUTURE-CALL: {symbol} - SHORT\n"
-                f"Interval: 15m\n\n"
-                f"💰 Entry: `{entry:.4f}`\n\n"
-                f"📉 TPs:\n"
-                f"TP1: `{tp1:.4f}`\n"
-                f"TP2: `{tp2:.4f}`\n"
-                f"TP3: `{tp3:.4f}`\n\n"
-                f"🛑 SL: `{sl:.4f}`\n\n"
-                f"Strict filters passed ✅"
-            )
+        ema9 = sum(closes[-9:])/9
+        ema21 = sum(closes[-21:])/21
+        if ema9 < ema21: # SHORT
+            return f"🚀 FUTURE-CALL: {symbol} - SHORT\nInterval: 15m\n\n💰 Entry: {entry:.4f}\n📉 TPs:\nTP1: {entry*0.992:.4f}\nTP2: {entry*0.985:.4f}\nTP3: {entry*0.97:.4f}\n🛑 SL: {entry*1.03:.4f}\n\nStrict filters passed ✅"
         return None
-    except Exception as e:
-        print(f"Skip {symbol}: {e}")
+    except:
         return None
 
-# --- MAIN - RUN ONCE AND EXIT ---
-print(f"FUTURE-CALLS BOT STARTED - Scanning {len(COINS)} coins")
-
+print(f"Scanning {len(COINS)} coins...")
 found = 0
 for coin in COINS:
-    sig = check_signal(coin)
-    if sig:
-        send_telegram(sig)
+    s = check(coin)
+    if s:
+        send(s)
         found += 1
     time.sleep(0.2)
-
-print(f"Done. Found {found} signals. Exiting now.")
+print(f"Done. Found {found} signals")
