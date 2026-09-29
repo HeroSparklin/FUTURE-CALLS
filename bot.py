@@ -1,95 +1,96 @@
 # wake up scheduler - commit to main
-import os, ccxt, requests
+import os, ccxt, requests, time
 from datetime import datetime, timezone
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_telegram(msg):
-    if not BOT_TOKEN or not CHAT_ID: return
+def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Missing BOT_TOKEN or CHAT_ID")
+        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+        r = requests.post(url, data=data, timeout=15)
+        print(f"Telegram status: {r.status_code} | {r.text[:200]}")
     except Exception as e:
-        print(f"TG error: {e}")
+        print(f"Telegram error: {e}")
 
-# ===== 70/100 STRICT - 150 COINS =====
-MIN_5M_CHANGE = 3.8
-MIN_24H_CHANGE = 2.0
-MIN_VOLUME_SPIKE = 2.1
-MIN_VOL_USDT = 800000
-BTC_MAX_DUMP = -1.2
+def main():
+    try:
+        exchange = ccxt.okx({'enableRateLimit': True})
+        print("Using OKX exchange - OK", end=" | ")
 
-exchange = ccxt.okx({'enableRateLimit': True})
-found = 0
-near_misses = []
-
-try:
-    btc = exchange.fetch_ticker('BTC/USDT')
-    btc_24 = btc.get('percentage',0) or 0
-    print(f"Using OKX exchange - OK | BTC 24h: {btc_24:.2f}%")
-
-    if btc_24 < BTC_MAX_DUMP:
-        print(f"BTC dumping {btc_24:.2f}% - pause")
-        print("Done. Found 0")
-        raise SystemExit
-
-    tickers = exchange.fetch_tickers()
-    usdt = {k:v for k,v in tickers.items() if '/USDT' in k}
-    top = sorted(usdt.items(), key=lambda x: (x[1].get('quoteVolume',0) or 0), reverse=True)[:150]
-
-    print(f"Scanning {len(top)} coins on okx... 70/100")
-
-    for symbol in [c[0] for c in top]:
+        # BTC 24h check
         try:
-            ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=20)
-            if len(ohlcv) < 20: continue
-
-            close_now = ohlcv[-1][4]
-            close_prev = ohlcv[-2][4]
-            change_5m = ((close_now - close_prev) / close_prev) * 100
-
-            vol_now = ohlcv[-1][5]
-            vol_avg = sum([c[5] for c in ohlcv[-11:-1]]) / 10
-            vol_spike = vol_now / vol_avg if vol_avg > 0 else 0
-
-            ticker = usdt.get(symbol, {})
-            change_24h = ticker.get('percentage',0) or 0
-            vol_usdt = ticker.get('quoteVolume',0) or 0
-
-            # Track near misses to show bot is alive
-            if change_5m >= 2.0 and vol_spike >= 1.4:
-                near_misses.append(f"{symbol} {change_5m:.1f}%/{vol_spike:.1f}x")
-
-            if change_5m >= MIN_5M_CHANGE and change_24h >= MIN_24H_CHANGE and vol_spike >= MIN_VOLUME_SPIKE and vol_usdt >= MIN_VOL_USDT:
-                if ohlcv[-1][4] < ohlcv[-1][1]: continue
-                if ohlcv[-2][4] < ohlcv[-2][1]: continue
-
-                found += 1
-                msg = f"""⚡ *70/100 PUMP* ⚡
-
-*Coin:* `{symbol}`
-*5m:* +{change_5m:.2f}% | *24h:* +{change_24h:.2f}%
-*Vol Spike:* {vol_spike:.1f}x | *Vol:* ${vol_usdt/1e6:.1f}M
-*BTC:* {btc_24:+.2f}%
-
-`@Herocallss`
-"""
-                send_telegram(msg)
-                if found >= 2: break
+            btc = exchange.fetch_ticker('BTC/USDT')
+            btc_24 = btc.get('percentage', 0) or 0
+            print(f"BTC 24h: {btc_24:.2f}%")
         except:
-            continue
+            btc_24 = 0
+            print("BTC 24h: 0.00%")
 
-    if near_misses:
-        print(f"Near miss (not 70/100): {', '.join(near_misses[:6])}")
+        # Get top 150 coins by volume
+        markets = exchange.load_markets()
+        tickers = exchange.fetch_tickers()
+        usdt_tickers = [k for k in tickers if '/USDT' in k and tickers[k].get('quoteVolume')]
+        sorted_coins = sorted(usdt_tickers, key=lambda x: tickers[x]['quoteVolume'] or 0, reverse=True)[:150]
 
-    print(f"Done. Found {found}")
-    if found == 0:
-        print("No trend found - market sideways, will try next run")
-        hour = datetime.now(timezone.utc).hour
-        if hour == 8 and len(near_misses) == 0:
-            send_telegram(f"✅ Bot Alive - 70/100 scan active | 150 coins scanned | BTC {btc_24:+.2f}% | Market sideways, no quality setup. Next scan in 5m.")
+        print(f"Scanning 150 coins on okx... 70/100")
 
-except Exception as e:
-    print(f"Bot error: {e}")
-    print(f"Done. Found {found}")
+        found = 0
+        near_misses = []
+
+        for symbol in sorted_coins:
+            try:
+                # Fetch last 25 5m candles
+                ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=25)
+                if len(ohlcv) < 24:
+                    continue
+
+                # Current 5m change
+                last_close = ohlcv[-1][4]
+                prev_close = ohlcv[-2][4]
+                change_5m = ((last_close - prev_close) / prev_close) * 100
+
+                # Volume spike check
+                last_vol = ohlcv[-1][5]
+                avg_vol = sum(c[5] for c in ohlcv[-20:-1]) / 19
+                vol_mult = last_vol / avg_vol if avg_vol > 0 else 0
+
+                # 1H trend
+                change_1h = ((ohlcv[-1][4] - ohlcv[-12][4]) / ohlcv[-12][4]) * 100 if len(ohlcv) >= 12 else 0
+
+                # 70/100 LOGIC
+                # Need +3.8% in 5m + 2.0x volume + uptrend
+                if change_5m >= 3.8 and vol_mult >= 2.0 and change_1h > 0:
+                    found += 1
+                    price = last_close
+                    msg = f"🚀 *70/100 PUMP DETECTED*\n\nCoin: `{symbol}`\n5m: +{change_5m:.2f}%\n1h: +{change_1h:.2f}%\nVol: {vol_mult:.1f}x avg\nPrice: {price}\n\nExchange: OKX\n@Herocallss"
+                    send_telegram(msg)
+                    time.sleep(1)
+
+                # Track near misses for debug
+                if change_5m >= 2.0:
+                    near_misses.append(f"{symbol} +{change_5m:.1f}%")
+
+            except Exception as e:
+                continue
+
+        print(f"Done. Found {found}")
+        if found == 0:
+            print("No trend found - market sideways, will try next run")
+            now_utc = datetime.now(timezone.utc)
+            print(f"Current UTC: {now_utc.hour}:{now_utc.minute} | near_misses: {len(near_misses)}")
+            # HEARTBEAT: 9:00-9:10 Lagos = 8:00-8:10 UTC - send even if near_misses exist
+            if now_utc.hour == 8 and now_utc.minute < 10:
+                print("Sending heartbeat...")
+                send_telegram(f"✅ *Bot Alive - 70/100 active*\nScanned 150 coins on OKX\nBTC {btc_24:+.2f}% | Market sideways, no 70/100 setup yet.\nNext scan in 5m. @Herocallss")
+
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        # send_telegram(f"⚠️ Bot error: {e}")
+
+if __name__ == "__main__":
+    main()
