@@ -1,22 +1,19 @@
-name: .github/workflows/bot.yml
+name: bot
 on:
+  workflow_dispatch:
   schedule:
     - cron: '*/5 * * * *'
-  workflow_dispatch:
 
 jobs:
-  bot:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - name: Install dependencies
-        run: pip install ccxt requests
-      - name: Run test
-        env:
+      - run: pip install ccxt requests
+      - env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python test.py
