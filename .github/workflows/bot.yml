@@ -1,26 +1,35 @@
-name: run-bot
+import os
+import requests
 
-on:
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          
-      - name: Install deps
-        run: pip install -r requirements.txt
-        
-      - name: Run bot
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python bot.py
+print(f"TOKEN exists: {bool(BOT_TOKEN)}")
+print(f"CHAT_ID exists: {bool(CHAT_ID)}")
+
+url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+message = """✅ CONFIRMED: @Herocallss is ACTIVE & CONNECTED
+
+Your bot is online and linked to this channel.
+Connection test: SUCCESSFUL
+Time: Now
+
+70/100 scanner is ready to run.
+"""
+
+data = {
+    "chat_id": CHAT_ID,
+    "text": message
+}
+
+try:
+    r = requests.post(url, data=data, timeout=15)
+    print(f"Status: {r.status_code}")
+    print(f"Response: {r.text}")
+    if r.status_code == 200:
+        print("SUCCESS - Check your Telegram channel now!")
+    else:
+        print("FAILED - Check your BOT_TOKEN / CHAT_ID or make bot admin")
+except Exception as e:
+    print(f"Error: {e}")
