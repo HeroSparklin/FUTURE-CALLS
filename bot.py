@@ -4,9 +4,14 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_text(msg):
+def send_text(msg, use_markdown=False):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+    data = {"chat_id": CHAT_ID, "text": msg}
+    if use_markdown:
+        data["parse_mode"] = "Markdown"
+    r = requests.post(url, json=data, timeout=15)
+    print(f"Telegram response: {r.status_code} - {r.text[:200]}")
+    return r
 
 def get_ex(name):
     try:
@@ -90,42 +95,38 @@ def main():
     now = datetime.now(timezone.utc)
     lagos_hour = (now.hour + 1) % 24
     if lagos_hour in [9, 15, 21] and now.minute < 10:
-        send_text(f"✅ Bot Alive - {total}/450 active\nScanning OKX+GATE+BITGET ({total} coins) - 70/100 strict\nTime: {lagos_hour}:00 Lagos - Bot Running")
+        send_text(f"Bot Alive - {total}/450 active\nScanning OKX+GATE+BITGET ({total} coins) - 70/100 strict\nTime: {lagos_hour}:00 Lagos - Bot Running", use_markdown=False)
 
     if not all_coins:
         print("No trend found - market sideways, will try next run")
         return
 
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
-        red = "🔴" if c['side']=="SHORT" else "🟢"
-        caption = f"""🚀 FUTURE CALLS - Herocallss 🚀
-_______________________
+        red = "SHORT" if c['side']=="SHORT" else "LONG"
+        caption = f"""FUTURE CALLS - Herocallss
 
-🌐 Coin: {c['symbol']}
-📊 Signal: {red} {c['side']}
-⚡ Leverage: {c['leverage']} {c['margin']}
-⭐ Score: {c['score']}/100
+Coin: {c['symbol']}
+Signal: {red} {c['side']}
+Leverage: {c['leverage']} {c['margin']}
+Score: {c['score']}/100
 
-_______________________
-
-🔵 ENTRY PRICE:
+ENTRY PRICE:
 {round(c['entry'],6) if c['entry']<1 else round(c['entry'],4)}
 
-🟢 EXIT PRICES (Take Profit):
+EXIT PRICES (Take Profit):
 TP1: {round(c['tp1'],6) if c['tp1']<1 else round(c['tp1'],4)}
 TP2: {round(c['tp2'],6) if c['tp2']<1 else round(c['tp2'],4)}
 TP3: {round(c['tp3'],6) if c['tp3']<1 else round(c['tp3'],4)}
 
-🔴 EXIT PRICE (Stop Loss):
+Stop Loss:
 SL: {round(c['sl'],6) if c['sl']<1 else round(c['sl'],4)}
 
-_______________________
-
-⏰ {now.strftime('%Y-%m-%d %H:%M UTC')}
-⚠️ 1-2% risk per trade.
+Time: {now.strftime('%Y-%m-%d %H:%M UTC')}
+Risk 1-2% per trade.
 @Herocallss
 """
-        send_text(caption)
+        print(f"Sending signal {c['symbol']}...")
+        send_text(caption, use_markdown=False)
 
 if __name__=="__main__":
     main()
