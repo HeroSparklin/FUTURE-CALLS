@@ -1,11 +1,5 @@
 import ccxt, time, os, requests
 from datetime import datetime, timezone
-try:
-    import matplotlib.pyplot as plt
-    import numpy as np
-    HAS_CHART = True
-except:
-    HAS_CHART = False
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -13,14 +7,6 @@ CHAT_ID = os.getenv("CHAT_ID")
 def send_text(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-
-def send_photo(path, caption):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        with open(path, 'rb') as f:
-            requests.post(url, files={'photo': f}, data={'chat_id': CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'}, timeout=20)
-    except:
-        send_text(caption)
 
 def get_ex(name):
     try:
@@ -30,49 +16,20 @@ def get_ex(name):
     except:
         return None
 
-def make_chart(symbol, side, entry, tp1, tp2, tp3, sl, leverage):
-    if not HAS_CHART:
-        return None
-    try:
-        plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(8, 3.5), dpi=150)
-        fig.patch.set_facecolor('#0e0e1a')
-        ax.set_facecolor('#0e0e1a')
-        x = list(range(60))
-        y = [entry * (1 + (np.random.randn()*0.006)) for _ in x]
-        ax.plot(x, y, color='#ff4444' if side=='SHORT' else '#00ff88', linewidth=1.2)
-        ax.axhline(entry, color='white', linestyle='--', linewidth=0.7, alpha=0.8)
-        ax.axhline(sl, color='red', linestyle='-', linewidth=0.7)
-        ax.axhline(tp1, color='#00ff88', linestyle=':', linewidth=0.6)
-        ax.set_title(f"{symbol} {side} {leverage} - ENTRY & EXIT", color='white', fontsize=8)
-        ax.tick_params(colors='gray', labelsize=7)
-        for s in ax.spines.values(): s.set_color('#333')
-        plt.tight_layout()
-        p = f"/tmp/{symbol}.png"
-        plt.savefig(p, facecolor='#0e0e1a')
-        plt.close()
-        return p
-    except:
-        return None
-
 def scan_fast(ex, limit=150):
     found=[]
     try:
         tickers = ex.fetch_tickers()
-        # FAST FILTER FIRST - use ticker % before fetching candles
         candidates=[]
         for symbol, t in tickers.items():
             if '/USDT' not in symbol: continue
             qv = t.get('quoteVolume',0) or 0
             ch = t.get('percentage',0) or 0
             if qv < 800000: continue
-            if abs(ch) < 3.5: continue # only coins already up 3.5%+
+            if abs(ch) < 3.5: continue
             candidates.append((symbol, ch, qv))
-
-        # Sort by biggest movers
         candidates = sorted(candidates, key=lambda x: abs(x[1]), reverse=True)[:limit]
         print(f"{ex.id} pre-filter: {len(candidates)} candidates from {len(tickers)} tickers")
-
         for symbol, ch, qv in candidates:
             try:
                 ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
@@ -82,11 +39,9 @@ def scan_fast(ex, limit=150):
                 vol_avg = sum(v[5] for v in ohlcv[-6:-1])/5
                 vol_mult = vol_last/vol_avg if vol_avg else 0
                 if vol_mult < 2.0: continue
-
                 ema7 = sum(v[4] for v in ohlcv[-7:])/7
                 side = "LONG" if last>ema7 and ch>0 else "SHORT" if last<ema7 and ch<0 else None
                 if not side: continue
-
                 score = 50
                 if abs(ch) >= 3.8: score+=10
                 if abs(ch) >= 5.0: score+=10
@@ -95,13 +50,11 @@ def scan_fast(ex, limit=150):
                 if qv > 2000000: score+=10
                 score = min(score, 99)
                 if score < 70: continue
-
                 entry = last
                 if side=="LONG":
                     tp1=entry*1.015; tp2=entry*1.03; tp3=entry*1.05; sl=entry*0.97
                 else:
                     tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
-
                 found.append({'symbol': symbol.replace('/',''), 'side': side, 'entry': entry, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'sl': sl, 'leverage': '10x', 'margin': 'Isolated', 'score': score})
                 if len(found)>=5: break
             except:
@@ -144,7 +97,6 @@ def main():
         return
 
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
-        chart = make_chart(c['symbol'], c['side'], c['entry'], c['tp1'], c['tp2'], c['tp3'], c['sl'], c['leverage'])
         red = "🔴" if c['side']=="SHORT" else "🟢"
         caption = f"""🚀 FUTURE CALLS - Herocallss 🚀
 _______________________
@@ -152,6 +104,7 @@ _______________________
 🌐 Coin: {c['symbol']}
 📊 Signal: {red} {c['side']}
 ⚡ Leverage: {c['leverage']} {c['margin']}
+⭐ Score: {c['score']}/100
 
 _______________________
 
@@ -172,10 +125,7 @@ _______________________
 ⚠️ 1-2% risk per trade.
 @Herocallss
 """
-        if chart:
-            send_photo(chart, caption)
-        else:
-            send_text(caption)
+        send_text(caption)
 
 if __name__=="__main__":
     main()
