@@ -74,18 +74,33 @@ def scan(ex, limit=150):
                 vol_avg = sum(v[5] for v in ohlcv[-6:-1])/5
                 vol_mult = vol_last/vol_avg if vol_avg else 0
                 qv = data.get('quoteVolume',0) or 0
+
+                # --- 70/100 STRICT ---
                 if qv < 500000: continue
                 if vol_mult < 2.0: continue
                 if abs(change) < 3.8: continue
                 ema7 = sum(v[4] for v in ohlcv[-7:])/7
                 side = "LONG" if last>ema7 and change>0 else "SHORT" if last<ema7 and change<0 else None
                 if not side: continue
+
+                score = 50
+                if abs(change) >= 3.8: score+=10
+                if abs(change) >= 5.0: score+=10
+                if vol_mult >= 2.5: score+=10
+                if vol_mult >= 3.5: score+=10
+                if qv > 2000000: score+=10
+                score = min(score, 99)
+
+                if score < 70:
+                    continue
+
                 entry = last
                 if side=="LONG":
                     tp1=entry*1.015; tp2=entry*1.03; tp3=entry*1.05; sl=entry*0.97
                 else:
                     tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
-                found.append({'symbol': symbol.replace('/',''), 'side': side, 'entry': entry, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'sl': sl, 'leverage': '10x', 'margin': 'Isolated'})
+
+                found.append({'symbol': symbol.replace('/',''), 'side': side, 'entry': entry, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'sl': sl, 'leverage': '10x', 'margin': 'Isolated', 'score': score})
                 c+=1
                 if len(found)>=limit: break
             except:
@@ -99,24 +114,31 @@ def main():
     gate = get_ex('gate')
     all_coins=[]; total=0
     if okx:
-        r=scan(okx,150); all_coins.extend(r); total+=150; time.sleep(2)
+        print("Using OKX exchange - OK")
+        r=scan(okx,150)
+        print(f"OKX scanned 150, pumps: {len(r)} - 70/100 strict")
+        all_coins.extend(r); total+=150; time.sleep(2)
     if gate:
-        r=scan(gate,150); all_coins.extend(r); total+=150
+        print("Using GATE exchange - OK")
+        r=scan(gate,150)
+        print(f"GATE scanned 150, pumps: {len(r)} - 70/100 strict")
+        all_coins.extend(r); total+=150
+
+    print(f"Scanning {total} coins on okx+gate... 70/100")
+    print(f"Done. Found {len(all_coins)}")
 
     now = datetime.now(timezone.utc)
-    # Heartbeat 9AM Lagos = 8AM UTC daily
     if now.hour==8 and now.minute<10:
-        send_text(f"✅ Bot Alive - {total}/100 active\nScanning OKX+GATE ({total} coins)\nTime: 9AM Lagos")
+        send_text(f"✅ Bot Alive - {total}/100 active\nScanning OKX+GATE ({total} coins) - 70/100 strict\nTime: 9AM Lagos")
 
     if not all_coins:
-        print("No trend found")
+        print("No trend found - market sideways, will try next run")
         return
 
-    for c in sorted(all_coins, key=lambda x: x['entry'], reverse=True)[:2]:
+    for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
         chart = make_chart(c['symbol'], c['side'], c['entry'], c['tp1'], c['tp2'], c['tp3'], c['sl'], c['leverage'])
         red = "🔴" if c['side']=="SHORT" else "🟢"
 
-        # THIS FORMAT IS LOCKED - EXACTLY LIKE YOUR SCREENSHOT
         caption = f"""🚀 FUTURE CALLS - Herocallss 🚀
 _______________________
 
