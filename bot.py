@@ -55,7 +55,7 @@ def make_chart(symbol, side, entry, tp1, tp2, tp3, sl, leverage):
     except:
         return None
 
-def scan(ex, limit=250):
+def scan(ex, limit=150):
     found=[]
     try:
         tickers = ex.fetch_tickers()
@@ -63,7 +63,7 @@ def scan(ex, limit=250):
         c=0
         for symbol, data in sorted_t:
             if '/USDT' not in symbol: continue
-            if c>=limit*2: break
+            if c>=limit*1.5: break
             try:
                 ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
                 if len(ohlcv)<20: continue
@@ -115,19 +115,19 @@ def main():
     all_coins=[]; total=0
     if okx:
         print("Using OKX exchange - OK")
-        r=scan(okx,250)
-        print(f"OKX scanned 250, pumps: {len(r)} - 70/100 strict")
-        all_coins.extend(r); total+=250; time.sleep(1)
+        r=scan(okx,150)
+        print(f"OKX scanned 150, pumps: {len(r)} - 70/100 strict")
+        all_coins.extend(r); total+=150; time.sleep(1)
     if gate:
         print("Using GATE exchange - OK")
-        r=scan(gate,250)
-        print(f"GATE scanned 250, pumps: {len(r)} - 70/100 strict")
-        all_coins.extend(r); total+=250; time.sleep(1)
+        r=scan(gate,150)
+        print(f"GATE scanned 150, pumps: {len(r)} - 70/100 strict")
+        all_coins.extend(r); total+=150; time.sleep(1)
     if bitget:
         print("Using BITGET exchange - OK")
-        r=scan(bitget,250)
-        print(f"BITGET scanned 250, pumps: {len(r)} - 70/100 strict")
-        all_coins.extend(r); total+=250
+        r=scan(bitget,150)
+        print(f"BITGET scanned 150, pumps: {len(r)} - 70/100 strict")
+        all_coins.extend(r); total+=150
 
     print(f"Scanning {total} coins on okx+gate+bitget... 70/100")
     print(f"Done. Found {len(all_coins)}")
@@ -137,7 +137,7 @@ def main():
 
     # HEARTBEAT 3x PER DAY - 9AM, 3PM, 9PM Lagos
     if lagos_hour in [9, 15, 21] and now.minute < 10:
-        send_text(f"✅ Bot Alive - {total}/750 active\nScanning OKX+GATE+BITGET ({total} coins) - 70/100 strict\nTime: {lagos_hour}:00 Lagos - Bot Running")
+        send_text(f"✅ Bot Alive - {total}/450 active\nScanning OKX+GATE+BITGET ({total} coins) - 70/100 strict\nTime: {lagos_hour}:00 Lagos - Bot Running")
 
     if not all_coins:
         print("No trend found - market sideways, will try next run")
