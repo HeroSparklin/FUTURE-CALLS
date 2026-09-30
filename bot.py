@@ -55,43 +55,46 @@ def make_chart(symbol, side, entry, tp1, tp2, tp3, sl, leverage):
     except:
         return None
 
-def scan(ex, limit=150):
+def scan_fast(ex, limit=150):
     found=[]
     try:
         tickers = ex.fetch_tickers()
-        sorted_t = sorted(tickers.items(), key=lambda x: x[1].get('quoteVolume',0) or 0, reverse=True)
-        c=0
-        for symbol, data in sorted_t:
+        # FAST FILTER FIRST - use ticker % before fetching candles
+        candidates=[]
+        for symbol, t in tickers.items():
             if '/USDT' not in symbol: continue
-            if c>=limit*1.5: break
+            qv = t.get('quoteVolume',0) or 0
+            ch = t.get('percentage',0) or 0
+            if qv < 800000: continue
+            if abs(ch) < 3.5: continue # only coins already up 3.5%+
+            candidates.append((symbol, ch, qv))
+
+        # Sort by biggest movers
+        candidates = sorted(candidates, key=lambda x: abs(x[1]), reverse=True)[:limit]
+        print(f"{ex.id} pre-filter: {len(candidates)} candidates from {len(tickers)} tickers")
+
+        for symbol, ch, qv in candidates:
             try:
                 ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
                 if len(ohlcv)<20: continue
                 last = ohlcv[-1][4]
-                prev = ohlcv[-2][4]
-                change = ((last-prev)/prev*100) if prev else 0
                 vol_last = ohlcv[-1][5]
                 vol_avg = sum(v[5] for v in ohlcv[-6:-1])/5
                 vol_mult = vol_last/vol_avg if vol_avg else 0
-                qv = data.get('quoteVolume',0) or 0
-
-                if qv < 500000: continue
                 if vol_mult < 2.0: continue
-                if abs(change) < 3.8: continue
+
                 ema7 = sum(v[4] for v in ohlcv[-7:])/7
-                side = "LONG" if last>ema7 and change>0 else "SHORT" if last<ema7 and change<0 else None
+                side = "LONG" if last>ema7 and ch>0 else "SHORT" if last<ema7 and ch<0 else None
                 if not side: continue
 
                 score = 50
-                if abs(change) >= 3.8: score+=10
-                if abs(change) >= 5.0: score+=10
+                if abs(ch) >= 3.8: score+=10
+                if abs(ch) >= 5.0: score+=10
                 if vol_mult >= 2.5: score+=10
                 if vol_mult >= 3.5: score+=10
                 if qv > 2000000: score+=10
                 score = min(score, 99)
-
-                if score < 70:
-                    continue
+                if score < 70: continue
 
                 entry = last
                 if side=="LONG":
@@ -100,8 +103,7 @@ def scan(ex, limit=150):
                     tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
 
                 found.append({'symbol': symbol.replace('/',''), 'side': side, 'entry': entry, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'sl': sl, 'leverage': '10x', 'margin': 'Isolated', 'score': score})
-                c+=1
-                if len(found)>=limit: break
+                if len(found)>=5: break
             except:
                 continue
     except Exception as e:
@@ -115,17 +117,17 @@ def main():
     all_coins=[]; total=0
     if okx:
         print("Using OKX exchange - OK")
-        r=scan(okx,150)
+        r=scan_fast(okx,150)
         print(f"OKX scanned 150, pumps: {len(r)} - 70/100 strict")
         all_coins.extend(r); total+=150; time.sleep(1)
     if gate:
         print("Using GATE exchange - OK")
-        r=scan(gate,150)
+        r=scan_fast(gate,150)
         print(f"GATE scanned 150, pumps: {len(r)} - 70/100 strict")
         all_coins.extend(r); total+=150; time.sleep(1)
     if bitget:
         print("Using BITGET exchange - OK")
-        r=scan(bitget,150)
+        r=scan_fast(bitget,150)
         print(f"BITGET scanned 150, pumps: {len(r)} - 70/100 strict")
         all_coins.extend(r); total+=150
 
@@ -134,8 +136,6 @@ def main():
 
     now = datetime.now(timezone.utc)
     lagos_hour = (now.hour + 1) % 24
-
-    # HEARTBEAT 3x PER DAY - 9AM, 3PM, 9PM Lagos
     if lagos_hour in [9, 15, 21] and now.minute < 10:
         send_text(f"✅ Bot Alive - {total}/450 active\nScanning OKX+GATE+BITGET ({total} coins) - 70/100 strict\nTime: {lagos_hour}:00 Lagos - Bot Running")
 
