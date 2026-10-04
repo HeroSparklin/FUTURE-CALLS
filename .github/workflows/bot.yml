@@ -1,8 +1,26 @@
-risk:
-  # 80/100 Strict Risk Management
-  position_size_usdt: 20 # $20 per trade example - change to yours
-  leverage_mode: "Isolated" # Never cross for 80/100
-  max_leverage_majors: 10
-  max_leverage_alts: 12
-  # Big PnL also 80/100 so we control risk
-  use_trailing_after_tp1: true
+name: Future Calls Bot 80/100 Strict
+
+on:
+  schedule:
+    - cron: '*/3 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Run Bot
+        env:
+          BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+          BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
