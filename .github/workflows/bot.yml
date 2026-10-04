@@ -1,11 +1,9 @@
-name: Future Calls Bot 80/100 Strict
+name: Future Calls Scanner
 
 on:
   schedule:
-    - cron: '*/3 * * * *'
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+    - cron: '*/5 * * * *'  # Every 5 mins - free tier safe
+  workflow_dispatch:      # Manual Run button
 
 jobs:
   scan:
@@ -19,8 +17,6 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run Bot
         env:
-          BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
-          BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
