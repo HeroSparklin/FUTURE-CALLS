@@ -1,4 +1,1 @@
 requests
-ccxt
-matplotlib
-numpy
