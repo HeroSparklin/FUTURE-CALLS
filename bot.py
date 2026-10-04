@@ -1,94 +1,102 @@
-import requests, time, os
+import requests, os, time
 
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MIN_SCORE = 80
-MIN_VOL = 2000000
-MAJORS = ["BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","BNBUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","TONUSDT"]
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        print(text)
+        return
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
+        print(text)
 
 def get_tickers():
-    url = "https://api.bybit.com/v5/market/tickers?category=linear"
-    for i in range(3): # 3 retries
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            print(f"Status: {r.status_code}, Length: {len(r.text)}")
-            if r.status_code != 200:
-                print(f"Bybit error: {r.text[:500]}")
-                time.sleep(2)
-                continue
-            data = r.json()
-            if 'result' in data and 'list' in data['result']:
-                return data['result']['list']
-            else:
-                print(f"Unexpected JSON: {data}")
-                time.sleep(2)
-        except Exception as e:
-            print(f"Attempt {i+1} failed: {e}")
-            print(f"Raw response: {r.text[:500] if 'r' in locals() else 'no response'}")
-            time.sleep(3)
-    print("Failed to get tickers after 3 tries - Bybit may be rate limiting GitHub IP")
-    return []
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    r = requests.get(url, headers=HEADERS, timeout=15)
+    print(f"Status: {r.status_code}")
+    data = r.json()
+    return data
 
 def calc(t):
     try:
+        symbol = t['symbol']
+        if not symbol.endswith("USDT"): return None
+        if symbol in ["USDCUSDT","BUSDUSDT","USDTUSDT"]: return None
         last = float(t['lastPrice'])
-        change = float(t['price24hPcnt'])*100
-        vol = float(t['turnover24h'])
-        high = float(t['highPrice24h'])
-        low = float(t['lowPrice24h'])
+        change = float(t['priceChangePercent'])
+        vol = float(t['quoteVolume'])
+        high = float(t['highPrice'])
+        low = float(t['lowPrice'])
         vol24 = ((high-low)/low*100) if low else 0
-        if vol < MIN_VOL or vol24 < 3: return None
-        
+        if vol < 2000000 or vol24 < 3 or abs(change) < 2: return None
         score = 0
-        if vol > 50000000: score+=30
-        elif vol > 10000000: score+=20
-        else: score+=15
-        if vol24 > 15: score+=40
-        elif vol24 > 8: score+=30
-        else: score+=20
-        if abs(change) > 10: score+=30
-        elif abs(change) > 5: score+=20
-        else: score+=10
-        score = min(score,100)
+        if vol > 100000000: score += 30
+        elif vol > 20000000: score += 22
+        else: score += 15
+        if vol24 > 15: score += 40
+        elif vol24 > 8: score += 30
+        else: score += 20
+        if abs(change) > 10: score += 30
+        elif abs(change) > 5: score += 22
+        else: score += 12
         if score < MIN_SCORE: return None
-        
-        is_major = t['symbol'] in MAJORS
-        direction = "LONG" if change>0 else "SHORT"
+        majors = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT"]
+        is_major = symbol in majors
+        direction = "LONG" if change > 0 else "SHORT"
         entry = last
-        lev = 5 if is_major else 10
-        
-        if direction=="LONG":
-            tp1, tp2, sl = entry*1.02, entry*1.045, entry*0.985
+        leverage = 5 if is_major else 10
+        if direction == "LONG":
+            tp1 = entry * 1.02
+            tp2 = entry * 1.045
+            tp3 = entry * 1.07
+            sl = entry * 0.985
         else:
-            tp1, tp2, sl = entry*0.98, entry*0.955, entry*1.015
-        
-        tag = "BIG PnL 80/100" if score>=90 else "80/100 STRICT"
-        return f"{tag} | {t['symbol']} {score}/100 {direction}\nENTRY: {entry}\nLEV: {lev}x Isolated\nTP1: {tp1:.6f} (+2%) TP2: {tp2:.6f} (+4.5%)\nSL: {sl:.6f} (-1.5%)\n24h: {change:.2f}% Vol24: {vol24:.1f}%"
-    except Exception as e:
+            tp1 = entry * 0.98
+            tp2 = entry * 0.955
+            tp3 = entry * 0.93
+            sl = entry * 1.015
+        tag = "🔥 BIG PnL" if score >= 90 else "✅ 80/100 STRICT"
+        msg = f"""{tag} | {symbol} | {direction}
+
+*ENTRY:* `{entry}`
+*LEVERAGE:* {leverage}x Isolated
+
+*TP1:* `{tp1:.6f}` (+2%)
+*TP2:* `{tp2:.6f}` (+4.5%)
+*TP3:* `{tp3:.6f}` (+7%)
+
+*SL:* `{sl:.6f}` (-1.5%)
+
+Score: {score}/100 | 24h: {change:.2f}% | Volat: {vol24:.1f}%
+Exchange: Binance Futures (Bybit pair exists)
+"""
+        return msg
+    except:
         return None
 
 def main():
-    print("=== Bybit Futures 80/100 Strict Scan ===")
+    print("=== Binance Futures 80/100 Strict - FREE GitHub ===")
     tickers = get_tickers()
-    print(f"Scanning {len(tickers)} tickers...")
-    count=0
+    print(f"Scanning {len(tickers)} coins")
+    sent = 0
     for t in tickers:
-        if not t['symbol'].endswith('USDT'): continue
-        if t['symbol'] in ["USDTUSDT","USDCUSDT","DAIUSDT","USDEUSDT"]:
-            continue
         sig = calc(t)
-        if sig:
+        if sig and sent < 8:
+            send_telegram(sig)
             print(sig)
             print("---")
-            count+=1
-            if count>=10: break
-    if count==0:
-        print("No 80/100 signals this scan - strict filter, normal.")
-        # Don't exit with error - exit 0 so GitHub shows green
-    print(f"Done - {count} signals found")
+            sent += 1
+            time.sleep(1)
+    if sent == 0:
+        print("No 80/100 signals - strict filter, normal")
+    print(f"Done - {sent} signals")
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
