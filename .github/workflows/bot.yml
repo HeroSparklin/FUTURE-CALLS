@@ -2,7 +2,7 @@ name: Future Calls Scanner
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 mins - reliable free
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
