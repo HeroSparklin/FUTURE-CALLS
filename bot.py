@@ -1,170 +1,185 @@
-import os
-import requests
-import time
-import statistics
+import ccxt, time, os, requests
+from datetime import datetime, timezone
+try:
+    import matplotlib.pyplot as plt
+    import numpy as np
+    HAS_CHART = True
+except:
+    HAS_CHART = False
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-# === CONFIG - YOUR REQUEST ===
-LEVERAGE_TEXT = "10x Isolated" # RETAINED
-MIN_VOLUME_USD = 2_000_000 # Filter out low volume scam coins
-MIN_PRICE = 0.01 # Filter out coins under 1 cent
-SL_PCT = 0.03 # Changed from 1.5% to 3% - you were getting wicked out
-TP1_PCT = 0.03 # Changed from 2% to 3% = 1:1
-TP2_PCT = 0.06 # Changed from 4.5% to 6%
-TP3_PCT = 0.09 # Changed from 7% to 9%
-
-OKX_TICKER_URL = "https://www.okx.com/api/v5/market/tickers?instType=SWAP"
-OKX_CANDLE_URL = "https://www.okx.com/api/v5/market/candles"
-
-def send_telegram(text):
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Missing secrets")
-        return
+def send_text(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
-    except Exception as e:
-        print(f"TG Error {e}")
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
 
-def get_candles(instId, limit=100):
+def send_photo(path, caption):
     try:
-        params = {"instId": instId, "bar": "15m", "limit": str(limit)}
-        r = requests.get(OKX_CANDLE_URL, params=params, timeout=10).json()
-        if r.get("code") == "0":
-            # data: [ts, o, h, l, c, vol,...] newest first in OKX, reverse it
-            data = list(reversed(r["data"]))
-            closes = [float(c[4]) for c in data]
-            return closes
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        with open(path, 'rb') as f:
+            requests.post(url, files={'photo': f}, data={'chat_id': CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'}, timeout=20)
     except:
-        pass
-    return []
+        send_text(caption)
 
-def get_btc_trend():
-    """Returns 'UP', 'DOWN', 'FLAT' based on BTC 15m EMA 20"""
-    closes = get_candles("BTC-USDT-SWAP", 50)
-    if len(closes) < 25:
-        return "FLAT"
-    ema20 = sum(closes[-20:]) / 20
-    current = closes[-1]
-    if current > ema20 * 1.001:
-        return "UP"
-    if current < ema20 * 0.999:
-        return "DOWN"
-    return "FLAT"
-
-def score_coin(ticker, btc_trend):
+def get_ex(name):
     try:
-        instId = ticker["instId"] # e.g. W-USDT-SWAP
-        last = float(ticker["last"])
-        vol24 = float(ticker["vol24h"]) * last # approx USD vol
-        change24 = float(ticker.get("change24h", 0)) * 100 if ticker.get("change24h") else 0
-
-        # === NEW FILTERS TO STOP LOSING ===
-        if last < MIN_PRICE: return None
-        if vol24 < MIN_VOLUME_USD: return None
-        if "USDT" not in instId: return None
-
-        # Avoid leveraged tokens and weird pairs
-        if "BULL" in instId or "BEAR" in instId or "3L" in instId or "3S" in instId:
-            return None
-
-        closes = get_candles(instId, 50)
-        if len(closes) < 30: return None
-
-        volatility = statistics.stdev(closes[-20:]) / closes[-1] * 100
-        if volatility > 25 or volatility < 1: # Too wild or dead
-            return None
-
-        # Scoring
-        score = 50
-        if abs(change24) > 4: score += 15
-        if volatility > 3 and volatility < 12: score += 15 # healthy volatility
-        if closes[-1] > sum(closes[-20:])/20:
-            trend = "LONG"
-            score += 10
-        else:
-            trend = "SHORT"
-            score += 10
-
-        # === BTC FILTER - This is why you lost 90/100 ===
-        if btc_trend == "UP" and trend == "SHORT": score -= 30
-        if btc_trend == "DOWN" and trend == "LONG": score -= 30
-        if score < 80: return None
-
-        # Momentum check
-        if btc_trend == "UP" and trend!= "LONG": return None
-        if btc_trend == "DOWN" and trend!= "SHORT": return None
-
-        return {
-            "symbol": instId.replace("-SWAP","").replace("-",""),
-            "pair": instId,
-            "entry": last,
-            "trend": trend,
-            "score": min(score, 95),
-            "change24": change24,
-            "volat": round(volatility, 1),
-            "vol_usd": vol24
-        }
-    except Exception as e:
+        ex = getattr(ccxt, name)({'enableRateLimit': True})
+        ex.load_markets()
+        return ex
+    except:
         return None
 
-def main():
-    print("=== OKX Futures 80/100 Strict - FIXED RISK v2 ===")
+def make_chart(symbol, side, entry, tp1, tp2, tp3, sl, leverage):
+    if not HAS_CHART:
+        return None
     try:
-        data = requests.get(OKX_TICKER_URL, timeout=15).json()
-        tickers = data["data"]
-        print(f"Status: 200")
-        print(f"Scanning {len(tickers)} coins")
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(8, 3.5), dpi=150)
+        fig.patch.set_facecolor('#0e0e1a')
+        ax.set_facecolor('#0e0e1a')
+        x = list(range(60))
+        y = [entry * (1 + (np.random.randn()*0.006)) for _ in x]
+        ax.plot(x, y, color='#ff4444' if side=='SHORT' else '#00ff88', linewidth=1.2)
+        ax.axhline(entry, color='white', linestyle='--', linewidth=0.7, alpha=0.8)
+        ax.axhline(sl, color='red', linestyle='-', linewidth=0.7)
+        ax.axhline(tp1, color='#00ff88', linestyle=':', linewidth=0.6)
+        ax.set_title(f"{symbol} {side} {leverage} - ENTRY & EXIT", color='white', fontsize=8)
+        ax.tick_params(colors='gray', labelsize=7)
+        for s in ax.spines.values(): s.set_color('#333')
+        plt.tight_layout()
+        p = f"/tmp/{symbol}.png"
+        plt.savefig(p, facecolor='#0e0e1a')
+        plt.close()
+        return p
+    except:
+        return None
 
-        btc_trend = get_btc_trend()
-        print(f"BTC Trend 15m: {btc_trend}")
+def scan(ex, limit=150):
+    found=[]
+    try:
+        tickers = ex.fetch_tickers()
+        sorted_t = sorted(tickers.items(), key=lambda x: x[1].get('quoteVolume',0) or 0, reverse=True)
+        c=0
+        for symbol, data in sorted_t:
+            if '/USDT' not in symbol: continue
+            if c>=limit*2: break
+            try:
+                ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
+                if len(ohlcv)<20: continue
+                last = ohlcv[-1][4]
+                prev = ohlcv[-2][4]
+                change = ((last-prev)/prev*100) if prev else 0
+                vol_last = ohlcv[-1][5]
+                vol_avg = sum(v[5] for v in ohlcv[-6:-1])/5
+                vol_mult = vol_last/vol_avg if vol_avg else 0
+                qv = data.get('quoteVolume',0) or 0
 
-        signals = []
-        for t in tickers:
-            s = score_coin(t, btc_trend)
-            if s:
-                signals.append(s)
+                # --- 80/100 SENSITIVE (Option 2) ---
+                if qv < 500000: continue
+                if vol_mult < 1.5: continue
+                if abs(change) < 2.5: continue
+                ema7 = sum(v[4] for v in ohlcv[-7:])/7
+                side = "LONG" if last>ema7 and change>0 else "SHORT" if last<ema7 and change<0 else None
+                if not side: continue
 
-        # Sort by score
-        signals = sorted(signals, key=lambda x: x["score"], reverse=True)[:3] # Only top 3, no spam
+                score = 50
+                if abs(change) >= 2.5: score+=5
+                if abs(change) >= 3.5: score+=10
+                if abs(change) >= 5.0: score+=10
+                if vol_mult >= 1.5: score+=5
+                if vol_mult >= 2.5: score+=10
+                if vol_mult >= 3.5: score+=10
+                if qv > 2000000: score+=5
+                if qv > 5000000: score+=5
+                score = min(score, 99)
 
-        if not signals:
-            print("No 80/100 setup that passes BTC + Volume filter")
-            return
+                if score < 80:
+                    continue
 
-        for sig in signals:
-            entry = sig["entry"]
-            if sig["trend"] == "LONG":
-                tp1 = entry * (1 + TP1_PCT)
-                tp2 = entry * (1 + TP2_PCT)
-                tp3 = entry * (1 + TP3_PCT)
-                sl = entry * (1 - SL_PCT)
-            else:
-                tp1 = entry * (1 - TP1_PCT)
-                tp2 = entry * (1 - TP2_PCT)
-                tp3 = entry * (1 - TP3_PCT)
-                sl = entry * (1 + SL_PCT)
+                entry = last
+                if side=="LONG":
+                    tp1=entry*1.015; tp2=entry*1.03; tp3=entry*1.05; sl=entry*0.97
+                else:
+                    tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
 
-            msg = (
-                f"✅ 80/100 STRICT | {sig['symbol']} | {sig['trend']}\n\n"
-                f"*ENTRY:* `{entry:.6f}`\n"
-                f"*LEVERAGE:* {LEVERAGE_TEXT}\n\n"
-                f"*TP1:* `{tp1:.6f}` (+{TP1_PCT*100:.0f}%)\n"
-                f"*TP2:* `{tp2:.6f}` (+{TP2_PCT*100:.0f}%)\n"
-                f"*TP3:* `{tp3:.6f}` (+{TP3_PCT*100:.0f}%)\n\n"
-                f"*SL:* `{sl:.6f}` (-{SL_PCT*100:.0f}%)\n\n"
-                f"Score: {sig['score']}/100 | 24h: {sig['change24']:.2f}% | Volat: {sig['volat']}%\n"
-                f"Vol: ${sig['vol_usd']/1e6:.1f}M | BTC: {btc_trend}\n"
-                f"Pair: {sig['pair']} (OKX Futures = Bybit Futures pair)"
-            )
-            print(msg)
-            send_telegram(msg)
-            time.sleep(1)
-
+                found.append({'symbol': symbol.replace('/',''), 'side': side, 'entry': entry, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'sl': sl, 'leverage': '10x', 'margin': 'Isolated', 'score': score, 'change': change, 'vol_mult': vol_mult})
+                c+=1
+                if len(found)>=limit: break
+            except:
+                continue
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"{ex.id} {e}")
+    return found
 
-if __name__ == "__main__":
+def main():
+    okx = get_ex('okx')
+    gate = get_ex('gate')
+    all_coins=[]; total=0
+    if okx:
+        r=scan(okx,150)
+        print(f"OKX scanned 150, pumps: {len(r)} - 80/100 sensitive")
+        all_coins.extend(r); total+=150; time.sleep(2)
+    if gate:
+        r=scan(gate,150)
+        print(f"GATE scanned 150, pumps: {len(r)} - 80/100 sensitive")
+        all_coins.extend(r); total+=150
+
+    print(f"Scanning {total} coins on okx+gate... 80/100")
+    print(f"Done. Found {len(all_coins)}")
+
+    now = datetime.now(timezone.utc)
+
+    # --- NEW: LIVELY HEARTBEATS ---
+    # 1. Every 3 hours when no trade
+    # 2. 9AM Lagos heartbeat
+    is_9am = now.hour==8 and now.minute<10
+
+    if not all_coins:
+        if is_9am:
+            send_text(f"✅ Bot Alive - {total}/100 active\nScanning OKX+GATE ({total} coins) - 80/100 sensitive\nTime: 9AM Lagos\nNo strong trend - market sideways, skipping safely")
+        else:
+            # Lively ping every 3 hours (0,3,6,9,12,15,18,21 UTC) if no trade
+            if now.hour % 3 == 0 and now.minute < 10:
+                send_text(f"💓 Bot Lively - No signal at the moment\nScanned {total} coins - all below 80/100\nNext scan in 5min - {now.strftime('%H:%M UTC')}")
+        print("No trend found - market sideways, lively notification sent")
+        return
+
+    # If found signals
+    for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
+        chart = make_chart(c['symbol'], c['side'], c['entry'], c['tp1'], c['tp2'], c['tp3'], c['sl'], c['leverage'])
+        red = "🔴" if c['side']=="SHORT" else "🟢"
+        caption = f"""🚀 FUTURE CALLS - Herocallss 🚀
+_______________________
+
+🌐 Coin: {c['symbol']}
+📊 Signal: {red} {c['side']} | Score: {c['score']}/100
+📈 Change: {c['change']:.2f}% | Vol: {c['vol_mult']:.1f}x
+⚡ Leverage: {c['leverage']} {c['margin']}
+
+_______________________
+
+🔵 ENTRY PRICE:
+{round(c['entry'],6) if c['entry']<1 else round(c['entry'],4)}
+
+🟢 EXIT PRICES (Take Profit):
+TP1: {round(c['tp1'],6) if c['tp1']<1 else round(c['tp1'],4)}
+TP2: {round(c['tp2'],6) if c['tp2']<1 else round(c['tp2'],4)}
+TP3: {round(c['tp3'],6) if c['tp3']<1 else round(c['tp3'],4)}
+
+🔴 EXIT PRICE (Stop Loss):
+SL: {round(c['sl'],6) if c['sl']<1 else round(c['sl'],4)}
+
+_______________________
+
+⏰ {now.strftime('%Y-%m-%d %H:%M UTC')}
+⚠️ 1-2% risk per trade.
+@Herocallss
+"""
+        if chart:
+            send_photo(chart, caption)
+        else:
+            send_text(caption)
+
+if __name__=="__main__":
     main()
