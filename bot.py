@@ -129,23 +129,17 @@ def main():
     print(f"Done. Found {len(all_coins)}")
 
     now = datetime.now(timezone.utc)
-
-    # --- NEW: LIVELY HEARTBEATS ---
-    # 1. Every 3 hours when no trade
-    # 2. 9AM Lagos heartbeat
     is_9am = now.hour==8 and now.minute<10
 
     if not all_coins:
+        # FIXED: NOW ALWAYS SENDS LIVELY
         if is_9am:
             send_text(f"✅ Bot Alive - {total}/100 active\nScanning OKX+GATE ({total} coins) - 80/100 sensitive\nTime: 9AM Lagos\nNo strong trend - market sideways, skipping safely")
         else:
-            # Lively ping every 3 hours (0,3,6,9,12,15,18,21 UTC) if no trade
-            if now.hour % 3 == 0 and now.minute < 10:
-                send_text(f"💓 Bot Lively - No signal at the moment\nScanned {total} coins - all below 80/100\nNext scan in 5min - {now.strftime('%H:%M UTC')}")
-        print("No trend found - market sideways, lively notification sent")
+            send_text(f"💓 Bot Lively - No signal at the moment\nScanned {total} coins - all below 80/100\nNext scan in 5min - {now.strftime('%H:%M UTC')}")
+        print("No trend found - market sideways, lively notification ACTUALLY sent")
         return
 
-    # If found signals
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
         chart = make_chart(c['symbol'], c['side'], c['entry'], c['tp1'], c['tp2'], c['tp3'], c['sl'], c['leverage'])
         red = "🔴" if c['side']=="SHORT" else "🟢"
