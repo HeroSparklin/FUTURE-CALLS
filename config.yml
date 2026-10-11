@@ -1,8 +1,14 @@
 bot:
   name: "V2 FAST 55 COINS"
+  version: "2.0"
+  schedule:
+    interval_seconds: 10800
+    interval: "3h"
+    timezone: "UTC"
   interval: 10800
   mtf_threshold: 80
+  btc_dominance_threshold: 52.0
+  total_coins: 55
   coins:
-    total: 55
     major: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "TRX/USDT", "DOT/USDT", "LINK/USDT", "BCH/USDT", "NEAR/USDT", "LTC/USDT", "UNI/USDT"]
     alt: ["SHIB/USDT", "PEPE/USDT", "WIF/USDT", "BONK/USDT", "FLOKI/USDT", "QNT/USDT", "STONK/USDT", "FET/USDT", "RENDER/USDT", "ARB/USDT", "OP/USDT", "MATIC/USDT", "APT/USDT", "SUI/USDT", "INJ/USDT", "SEI/USDT", "TIA/USDT", "ENA/USDT", "W/USDT", "JUP/USDT", "PYTH/USDT", "STRK/USDT", "WLD/USDT", "FIL/USDT", "ETC/USDT", "HBAR/USDT", "ICP/USDT", "ATOM/USDT", "MKR/USDT", "AAVE/USDT", "PENGU/USDT", "ASTER/USDT", "POPCAT/USDT", "MEW/USDT", "BRETT/USDT", "MOG/USDT", "TURBO/USDT", "NEIRO/USDT", "GOAT/USDT", "PNUT/USDT"]
