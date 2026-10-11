@@ -1,7 +1,14 @@
-import ccxt, time, requests, random
+import ccxt
+import requests
+import random
+import os
+import yaml
 
-TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+# Load secrets from GitHub Secrets
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+
+# Config
 EXCHANGE = ccxt.binance()
 MTF_THRESHOLD = 80
 
@@ -30,44 +37,38 @@ TP_ALT = [0.05, 0.10, 0.20]
 SL_ALT = 0.05
 
 def send_telegram(msg):
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                  data={"chat_id": CHAT_ID, "text": msg})
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print(f"TELEGRAM MOCK: {msg}")
+        return
+    try:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 def get_mtf_score(symbol):
+    # Replace with your real MTF logic
     long_score = random.randint(30, 95)
     short_score = random.randint(30, 95)
     return long_score, short_score
 
 def get_market_status():
+    # Replace with real BTC.D fetch
     btc_d = 58.5
-    return btc_d < 52.0, btc_d
+    is_alt_season = btc_d < 52.0
+    return is_alt_season, btc_d
 
 def get_leverage(symbol, direction, mtf_score, is_alt_season):
     coin_type = "MAJOR" if symbol in MAJOR_COINS else "ALT"
-    # Leverage logic - strict like your 80+ rule
     if coin_type == "MAJOR":
-        if mtf_score >= 90:
-            lev = 10
-        elif mtf_score >= 85:
-            lev = 7
-        else:
-            lev = 5
-    else: # ALT - more volatile, less leverage
-        if mtf_score >= 90:
-            lev = 5
-        elif mtf_score >= 85:
-            lev = 4
-        else:
-            lev = 3
+        lev = 10 if mtf_score >= 90 else 7 if mtf_score >= 85 else 5
+    else:
+        lev = 5 if mtf_score >= 90 else 4 if mtf_score >= 85 else 3
 
-    # Alt season = reduce leverage 1x because pumps are bigger but wicks kill
     if is_alt_season and coin_type == "ALT":
         lev = max(2, lev - 1)
-
-    # Shorts always 1x less
     if direction == "SHORT":
         lev = max(2, lev - 1)
-
     return lev
 
 def calc_levels(entry, direction, is_alt):
@@ -88,7 +89,8 @@ def scan():
         coin_type = "MAJOR" if symbol in MAJOR_COINS else "ALT"
         long_s, short_s = get_mtf_score(symbol)
         try:
-            entry = EXCHANGE.fetch_ticker(symbol)['last']
+            ticker = EXCHANGE.fetch_ticker(symbol)
+            entry = ticker['last']
         except:
             continue
 
@@ -98,33 +100,20 @@ def scan():
         if long_s >= MTF_THRESHOLD:
             tp1, tp2, tp3, sl = calc_levels(entry, "LONG", is_alt)
             lev = get_leverage(symbol, "LONG", long_s, is_alt)
-            send_telegram(f"""🟢 LONG {long_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%
-Coin: {symbol}
-Leverage: {lev}x Isolated
-Entry: {entry}
-TP1: {tp1:.8f} (+{'5%' if is_alt else '3%'}) - Sell 40%
-TP2: {tp2:.8f} (+{'10%' if is_alt else '7%'}) - Sell 30%
-TP3: {tp3:.8f} (+{'20%' if is_alt else '12%'}) - Sell 30%
-SL: {sl:.8f} (-{'5%' if is_alt else '3%'})""")
+            send_telegram(f"🟢 LONG {long_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%\nCoin: {symbol}\nLeverage: {lev}x Isolated\nEntry: {entry}\nTP1: {tp1:.8f} (+{'5%' if is_alt else '3%'}) - Sell 40%\nTP2: {tp2:.8f} (+{'10%' if is_alt else '7%'}) - Sell 30%\nTP3: {tp3:.8f} (+{'20%' if is_alt else '12%'}) - Sell 30%\nSL: {sl:.8f} (-{'5%' if is_alt else '3%'})")
             sent += 1
 
         allow_short = not (is_alt and coin_type == "ALT")
         if allow_short and short_s >= MTF_THRESHOLD:
             tp1, tp2, tp3, sl = calc_levels(entry, "SHORT", is_alt)
             lev = get_leverage(symbol, "SHORT", short_s, is_alt)
-            send_telegram(f"""🔴 SHORT {short_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%
-Coin: {symbol}
-Leverage: {lev}x Isolated
-Entry: {entry}
-TP1: {tp1:.8f} (-{'5%' if is_alt else '3%'}) - Sell 40%
-TP2: {tp2:.8f} (-{'10%' if is_alt else '7%'}) - Sell 30%
-TP3: {tp3:.8f} (-{'20%' if is_alt else '12%'}) - Sell 30%
-SL: {sl:.8f} (+{'5%' if is_alt else '3%'})""")
+            send_telegram(f"🔴 SHORT {short_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%\nCoin: {symbol}\nLeverage: {lev}x Isolated\nEntry: {entry}\nTP1: {tp1:.8f} (-{'5%' if is_alt else '3%'}) - Sell 40%\nTP2: {tp2:.8f} (-{'10%' if is_alt else '7%'}) - Sell 30%\nTP3: {tp3:.8f} (-{'20%' if is_alt else '12%'}) - Sell 30%\nSL: {sl:.8f} (+{'5%' if is_alt else '3%'})")
             sent += 1
 
     if sent == 0:
-        send_telegram(f"Bot Lively [{mode} V2 FAST 55 COINS]\nStage1: {len(ALL_COINS)} coins | Stage2: {stage2} candidates\nNo {MTF_THRESHOLD}+ MTF signal | BTC.D {btc_d}%")
+        send_telegram(f"Bot Lively [{mode} V2 FAST 55 COINS]\nStage1: {len(ALL_COINS)} coins (Major 15 + Alt 40) | Stage2: {stage2} candidates\nNo {MTF_THRESHOLD}+ MTF signal | BTC.D {btc_d}%")
 
-while True:
+# THIS IS THE FIX - runs once and exits for GitHub Actions
+if __name__ == "__main__":
     scan()
-    time.sleep(10800)
+    print("Scan complete - exiting")
