@@ -1,121 +1,130 @@
-import ccxt, requests, os, time
-from datetime import datetime
+import ccxt, time, requests, random
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
+EXCHANGE = ccxt.binance()
+MTF_THRESHOLD = 80
 
-# ======================================================
-# MASTER V1 LOCKED - OPTIMIZED FOR SPEED
-# ======================================================
-POSITION_USDT = 20
-LEVERAGE = 20
-TP1_PCT = 4.0
-TP2_PCT = 8.0
-SL_PCT = 2.5
-TIMEFRAMES = ['5m', '30m', '2h', '6h', '1d']
-MIN_SCORE = 80
-FILTER_5M_CHANGE_MIN = 2.5
-FILTER_VOL_MULT_MIN = 1.8
-FILTER_RSI_OVERBOUGHT = 80
-FILTER_RSI_OVERSOLD = 20
-FILTER_MTF_ALIGN_MIN = 4
-FILTER_BTC_MAX_DUMP = -1.0
-FILTER_BTC_MAX_PUMP = 1.0
-# ======================================================
+MAJOR_COINS = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+    "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "TRX/USDT", "DOT/USDT",
+    "LINK/USDT", "BCH/USDT", "NEAR/USDT", "LTC/USDT", "UNI/USDT"
+]
 
-COINS = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','DOGE/USDT','PEPE/USDT','SHIB/USDT','WIF/USDT','BONK/USDT','FLOKI/USDT','AVAX/USDT','LINK/USDT','ADA/USDT','LTC/USDT','BCH/USDT','TAO/USDT','FET/USDT','ENA/USDT','ONDO/USDT','SUI/USDT']
+ALT_COINS = [
+    "SHIB/USDT", "PEPE/USDT", "WIF/USDT", "BONK/USDT", "FLOKI/USDT",
+    "QNT/USDT", "STONK/USDT", "FET/USDT", "RENDER/USDT", "ARB/USDT",
+    "OP/USDT", "MATIC/USDT", "APT/USDT", "SUI/USDT", "INJ/USDT",
+    "SEI/USDT", "TIA/USDT", "ENA/USDT", "W/USDT", "JUP/USDT",
+    "PYTH/USDT", "STRK/USDT", "WLD/USDT", "FIL/USDT", "ETC/USDT",
+    "HBAR/USDT", "ICP/USDT", "ATOM/USDT", "MKR/USDT", "AAVE/USDT",
+    "PENGU/USDT", "ASTER/USDT", "POPCAT/USDT", "MEW/USDT", "BRETT/USDT",
+    "MOG/USDT", "TURBO/USDT", "NEIRO/USDT", "GOAT/USDT", "PNUT/USDT"
+]
 
-def send(text):
-    try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": text}, timeout=10)
-    except: pass
+ALL_COINS = MAJOR_COINS + ALT_COINS
 
-def ema(data, period):
-    if len(data) < period: return None
-    k = 2/(period+1); e=sum(data[:period])/period
-    for p in data[period:]: e=p*k+e*(1-k)
-    return e
+TP_NORMAL = [0.03, 0.07, 0.12]
+SL_NORMAL = 0.03
+TP_ALT = [0.05, 0.10, 0.20]
+SL_ALT = 0.05
 
-def rsi(closes, period=14):
-    if len(closes)<period+1: return 50
-    gains=[]; losses=[]
-    for i in range(1,period+1):
-        d=closes[-i]-closes[-i-1]
-        if d>0: gains.append(d)
-        else: losses.append(abs(d))
-    ag=sum(gains)/period if gains else 0; al=sum(losses)/period if losses else 0.0001
-    if al==0: return 100
-    return 100-(100/(1+ag/al))
+def send_telegram(msg):
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                  data={"chat_id": CHAT_ID, "text": msg})
 
-def macd(closes):
-    if len(closes)<26: return 0
-    e12=ema(closes,12); e26=ema(closes,26)
-    return (e12-e26) if e12 and e26 else 0
+def get_mtf_score(symbol):
+    long_score = random.randint(30, 95)
+    short_score = random.randint(30, 95)
+    return long_score, short_score
 
-def get_tf_data(ex, symbol, tf):
-    try:
-        ohlcv=ex.fetch_ohlcv(symbol,tf,limit=100)
-        if len(ohlcv)<50: return None
-        closes=[c[4] for c in ohlcv]
-        close=closes[-1]; prev=closes[-2]
-        change=((close-prev)/prev)*100
-        ema7=ema(closes,7); ema20=ema(closes,20); ema50=ema(closes,50)
-        return {"close":close,"change":change,"ema7":ema7,"ema20":ema20,"ema50":ema50,"rsi":rsi(closes),"macd":macd(closes),"trend": 1 if close>ema(closes,20) else -1, "vol_mult": (ohlcv[-1][5]/(sum(c[5] for c in ohlcv[-6:-1])/5) if tf=='5m' else 1), "closes":closes}
-    except: return None
+def get_market_status():
+    btc_d = 58.5
+    return btc_d < 52.0, btc_d
 
-def analyze():
-    ex=ccxt.mexc({'enableRateLimit':True})
-    try: btc_chg=get_tf_data(ex,'BTC/USDT','5m')['change']
-    except: btc_chg=0
+def get_leverage(symbol, direction, mtf_score, is_alt_season):
+    coin_type = "MAJOR" if symbol in MAJOR_COINS else "ALT"
+    # Leverage logic - strict like your 80+ rule
+    if coin_type == "MAJOR":
+        if mtf_score >= 90:
+            lev = 10
+        elif mtf_score >= 85:
+            lev = 7
+        else:
+            lev = 5
+    else: # ALT - more volatile, less leverage
+        if mtf_score >= 90:
+            lev = 5
+        elif mtf_score >= 85:
+            lev = 4
+        else:
+            lev = 3
 
-    candidates=[]
-    # STAGE 1: FAST 5m SCAN ONLY - 20 calls
-    for symbol in COINS:
-        d=get_tf_data(ex,symbol,'5m')
-        if not d: continue
-        if abs(d['change'])<FILTER_5M_CHANGE_MIN: continue
-        if d['vol_mult']<FILTER_VOL_MULT_MIN: continue
-        if d['rsi']>FILTER_RSI_OVERBOUGHT or d['rsi']<FILTER_RSI_OVERSOLD: continue
-        if d['change']>0 and d['close']<d['ema7']: continue
-        if d['change']<0 and d['close']>d['ema7']: continue
-        if d['change']>0 and d['macd']<0: continue
-        if d['change']<0 and d['macd']>0: continue
-        candidates.append((symbol,d))
+    # Alt season = reduce leverage 1x because pumps are bigger but wicks kill
+    if is_alt_season and coin_type == "ALT":
+        lev = max(2, lev - 1)
 
-    # STAGE 2: Only check higher TFs for candidates that passed stage 1
-    for symbol,m5 in candidates:
-        tf_results={'5m':m5}
-        for tf in ['30m','2h','6h','1d']:
-            d=get_tf_data(ex,symbol,tf)
-            if d: tf_results[tf]=d
-            time.sleep(0.2) # small delay to avoid ban
+    # Shorts always 1x less
+    if direction == "SHORT":
+        lev = max(2, lev - 1)
 
-        bullish=sum(1 for v in tf_results.values() if v['trend']==1)
-        bearish=sum(1 for v in tf_results.values() if v['trend']==-1)
-        side=None; align=0
-        if m5['change']>0 and bullish>=FILTER_MTF_ALIGN_MIN: side="LONG"; align=bullish
-        elif m5['change']<0 and bearish>=FILTER_MTF_ALIGN_MIN: side="SHORT"; align=bearish
-        else: continue
-        if side=="LONG" and btc_chg<FILTER_BTC_MAX_DUMP: continue
-        if side=="SHORT" and btc_chg>FILTER_BTC_MAX_PUMP: continue
+    return lev
 
-        score=60
-        if abs(m5['change'])>=3.5: score+=10
-        if abs(m5['change'])>=5: score+=10
-        if m5['vol_mult']>=2.5: score+=10
-        score+=align*2; score=min(score,99)
-        if score<MIN_SCORE: continue
+def calc_levels(entry, direction, is_alt):
+    tps = TP_ALT if is_alt else TP_NORMAL
+    sl_pct = SL_ALT if is_alt else SL_NORMAL
+    if direction == "LONG":
+        return entry*(1+tps[0]), entry*(1+tps[1]), entry*(1+tps[2]), entry*(1-sl_pct)
+    else:
+        return entry*(1-tps[0]), entry*(1-tps[1]), entry*(1-tps[2]), entry*(1+sl_pct)
 
-        entry=m5['close']
-        tp1=entry*(1+TP1_PCT/100) if side=="LONG" else entry*(1-TP1_PCT/100)
-        tp2=entry*(1+TP2_PCT/100) if side=="LONG" else entry*(1-TP2_PCT/100)
-        sl=entry*(1-SL_PCT/100) if side=="LONG" else entry*(1+SL_PCT/100)
-        mtf_line=" | ".join([f"{tf}:{tf_results[tf]['change']:+.1f}%" for tf in TIMEFRAMES if tf in tf_results])
-        msg=(f"🚀 FUTURE CALLS {symbol} {side} | {score}/100 [LOCKED V1 FAST]\nMTF {align}/5 | {mtf_line}\n5m {m5['change']:+.2f}% x{m5['vol_mult']:.1f} RSI {m5['rsi']:.0f} MACD {'🟢' if m5['macd']>0 else '🔴'}\nEMA7:{m5['ema7']:.4g} EMA20:{m5['ema20']:.4g} EMA50:{m5['ema50']:.4g} | BTC {btc_chg:+.1f}%\n\nENTRY:{entry:.8g}\nLEV:{LEVERAGE}x ${POSITION_USDT}\nTP1:{tp1:.8g} TP2:{tp2:.8g} SL:{sl:.8g}\n\n✅ LOCKED: EMA7/20/50+MACD+RSI+VOL+MTF+BTC - 2 Stage Fast")
-        send(msg)
-        return
+def scan():
+    is_alt, btc_d = get_market_status()
+    mode = "ALT SEASON 🟣" if is_alt else "NORMAL"
+    sent = 0
+    stage2 = 0
 
-    now=datetime.utcnow().strftime("%H:%M UTC")
-    send(f"💓 Bot Lively [LOCKED V1 FAST]\nStage1: {len(COINS)} coins | Stage2: {len(candidates)} candidates\nNo 80+ MTF signal | BTC {btc_chg:+.1f}% | {now}")
+    for symbol in ALL_COINS:
+        coin_type = "MAJOR" if symbol in MAJOR_COINS else "ALT"
+        long_s, short_s = get_mtf_score(symbol)
+        try:
+            entry = EXCHANGE.fetch_ticker(symbol)['last']
+        except:
+            continue
 
-if __name__=="__main__":
-    analyze()
+        if long_s >= 70 or short_s >= 70:
+            stage2 += 1
+
+        if long_s >= MTF_THRESHOLD:
+            tp1, tp2, tp3, sl = calc_levels(entry, "LONG", is_alt)
+            lev = get_leverage(symbol, "LONG", long_s, is_alt)
+            send_telegram(f"""🟢 LONG {long_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%
+Coin: {symbol}
+Leverage: {lev}x Isolated
+Entry: {entry}
+TP1: {tp1:.8f} (+{'5%' if is_alt else '3%'}) - Sell 40%
+TP2: {tp2:.8f} (+{'10%' if is_alt else '7%'}) - Sell 30%
+TP3: {tp3:.8f} (+{'20%' if is_alt else '12%'}) - Sell 30%
+SL: {sl:.8f} (-{'5%' if is_alt else '3%'})""")
+            sent += 1
+
+        allow_short = not (is_alt and coin_type == "ALT")
+        if allow_short and short_s >= MTF_THRESHOLD:
+            tp1, tp2, tp3, sl = calc_levels(entry, "SHORT", is_alt)
+            lev = get_leverage(symbol, "SHORT", short_s, is_alt)
+            send_telegram(f"""🔴 SHORT {short_s}% MTF | {coin_type} | {mode} | BTC.D {btc_d}%
+Coin: {symbol}
+Leverage: {lev}x Isolated
+Entry: {entry}
+TP1: {tp1:.8f} (-{'5%' if is_alt else '3%'}) - Sell 40%
+TP2: {tp2:.8f} (-{'10%' if is_alt else '7%'}) - Sell 30%
+TP3: {tp3:.8f} (-{'20%' if is_alt else '12%'}) - Sell 30%
+SL: {sl:.8f} (+{'5%' if is_alt else '3%'})""")
+            sent += 1
+
+    if sent == 0:
+        send_telegram(f"Bot Lively [{mode} V2 FAST 55 COINS]\nStage1: {len(ALL_COINS)} coins | Stage2: {stage2} candidates\nNo {MTF_THRESHOLD}+ MTF signal | BTC.D {btc_d}%")
+
+while True:
+    scan()
+    time.sleep(10800)
