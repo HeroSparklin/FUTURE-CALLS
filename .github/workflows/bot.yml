@@ -1,34 +1,29 @@
-bot:
-  name: "V2 FAST 55 COINS"
-  version: "2.0"
-  
-  # SCHEDULE - this was missing
+name: Update bot.yml
+
+on:
+  push:
+    branches: [main]
   schedule:
-    interval_seconds: 10800 # 3 hours
-    interval: "3h"
-    timezone: "UTC"
-    run_on_start: true
+    - cron: '0 */3 * * *' # Every 3 hours - THIS is your schedule
+  workflow_dispatch:
 
-  interval: 10800 # keep for backward compatibility
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  mtf_threshold: 80
-  btc_dominance_threshold: 52.0
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-  trading:
-    tp_normal: [0.03, 0.07, 0.12]
-    sl_normal: 0.03
-    tp_alt: [0.05, 0.10, 0.20]
-    sl_alt: 0.05
+      - name: Install deps
+        run: pip install -r requirements.txt
 
-  leverage:
-    major_80: 5
-    major_85: 7
-    major_90: 10
-    alt_80: 3
-    alt_85: 4
-    alt_90: 5
-
-  coins:
-    total: 55
-    major: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "TRX/USDT", "DOT/USDT", "LINK/USDT", "BCH/USDT", "NEAR/USDT", "LTC/USDT", "UNI/USDT"]
-    alt: ["SHIB/USDT", "PEPE/USDT", "WIF/USDT", "BONK/USDT", "FLOKI/USDT", "QNT/USDT", "STONK/USDT", "FET/USDT", "RENDER/USDT", "ARB/USDT", "OP/USDT", "MATIC/USDT", "APT/USDT", "SUI/USDT", "INJ/USDT", "SEI/USDT", "TIA/USDT", "ENA/USDT", "W/USDT", "JUP/USDT", "PYTH/USDT", "STRK/USDT", "WLD/USDT", "FIL/USDT", "ETC/USDT", "HBAR/USDT", "ICP/USDT", "ATOM/USDT", "MKR/USDT", "AAVE/USDT", "PENGU/USDT", "ASTER/USDT", "POPCAT/USDT", "MEW/USDT", "BRETT/USDT", "MOG/USDT", "TURBO/USDT", "NEIRO/USDT", "GOAT/USDT", "PNUT/USDT"]
+      - name: Run scanner V2 55 coins
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
