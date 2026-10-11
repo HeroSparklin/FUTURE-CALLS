@@ -4,12 +4,17 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 */3 * * *' # Every 3 hours - THIS is your schedule
+    - cron: '0 */3 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: bot-run
+  cancel-in-progress: true
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
