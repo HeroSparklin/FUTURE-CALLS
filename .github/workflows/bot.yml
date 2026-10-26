@@ -1,7 +1,9 @@
 name: Herocallss Bot
+
 on:
   schedule:
-    - cron: "0 */3 * * *"   # every 3 hours
+    # 7 UTC = 8AM Lagos Watchlist | 8 UTC = 9AM Lagos Alive | 9,12,15,18,21 = normal scans
+    - cron: "0 7,8,9,12,15,18,21 * * *"
   workflow_dispatch:
 
 jobs:
