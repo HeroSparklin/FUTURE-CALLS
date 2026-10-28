@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-QUANT_COINS = ['QNT', 'FET', 'RNDR', 'TAO', 'AGIX', 'OCEAN', 'GRT', 'LINK', 'INJ', 'AR', 'QNTUSDT']
+# Quant-type = 100/100 strict
+QUANT_COINS = ['QNT', 'FET', 'RNDR', 'TAO', 'AGIX', 'OCEAN', 'GRT', 'LINK', 'INJ', 'AR']
 
 def send_text(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -38,7 +39,7 @@ def scan(ex, limit=150):
                 vol_mult = vol_last/vol_avg if vol_avg else 0
                 qv = data.get('quoteVolume',0) or 0
                 base = symbol.split('/')[0]
-                is_quant = base in QUANT_COINS or any(q in symbol for q in QUANT_COINS)
+                is_quant = base in QUANT_COINS
 
                 score = 0
                 if qv >= 500000: score += 20
@@ -48,10 +49,9 @@ def scan(ex, limit=150):
                 if abs(change) >= 3.8: score += 20
                 if abs(change) >= 5.0: score += 20
 
-                # Strict filter
                 if is_quant:
                     if score < 100: continue
-                    label = "100/100"
+                    label = "100/100 QUANT"
                 else:
                     if score < 80: continue
                     label = "80/100"
@@ -103,7 +103,7 @@ def main():
     now = datetime.now(timezone.utc)
     lagos_hour = (now.hour + 1) % 24
 
-    # 3HRS HEARTBEAT - 12AM,3AM,6AM,9AM,12PM,3PM,6PM,9PM Lagos
+    # 3HRS HEARTBEAT: 12AM,3AM,6AM,9AM,12PM,3PM,6PM,9PM Lagos
     if lagos_hour % 3 == 0 and now.minute < 10:
         send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins) - 80/100 strict\nQuant: 100/100 strict | Time: {lagos_hour}:00 Lagos")
 
@@ -127,7 +127,7 @@ _______________________
 🔵 ENTRY PRICE:
 {round(c['entry'],6) if c['entry']<1 else round(c['entry'],4)}
 
-🟢 EXIT PRICES (Take Profit):
+🟢 TAKE PROFIT:
 TP1: {round(c['tp1'],6) if c['tp1']<1 else round(c['tp1'],4)}
 TP2: {round(c['tp2'],6) if c['tp2']<1 else round(c['tp2'],4)}
 TP3: {round(c['tp3'],6) if c['tp3']<1 else round(c['tp3'],4)}
