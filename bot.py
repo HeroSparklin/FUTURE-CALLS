@@ -123,4 +123,6 @@ SL: {round(c['sl'],6) if c['sl']<1 else round(c['sl'],4)}
         time.sleep(1)
 
 if __name__=="__main__":
-    main()
+    main() 
+
+
