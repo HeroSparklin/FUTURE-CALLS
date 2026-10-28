@@ -1,4 +1,2 @@
-ccxt
-requests
-matplotlib
-numpy
+ccxt==4.2.25
+requests==2.31.0
