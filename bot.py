@@ -26,7 +26,7 @@ def get_ex(name):
             time.sleep(2)
     return None
 
-def scan(ex, limit=60):
+def scan(ex, limit=40):
     found=[]
     try:
         tickers = ex.fetch_tickers()
@@ -54,7 +54,6 @@ def scan(ex, limit=60):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
-                # RETAINED: 80% BIG, 90% QUANT
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -84,16 +83,16 @@ def main():
     all_coins=[]
     total=0
     if okx:
-        r=scan(okx,60)
-        print(f"OKX scanned 60, pumps: {len(r)} - 80/100 strict")
+        r=scan(okx,40)
+        print(f"OKX scanned 40, pumps: {len(r)} - 80/100 strict")
         all_coins.extend(r)
-        total+=60
+        total+=40
         time.sleep(1)
     if gate:
-        r=scan(gate,60)
-        print(f"GATE scanned 60, pumps: {len(r)} - 90/100 quant strict")
+        r=scan(gate,40)
+        print(f"GATE scanned 40, pumps: {len(r)} - 90/100 quant strict")
         all_coins.extend(r)
-        total+=60
+        total+=40
 
     print(f"Scanning {total} coins on okx+gate... 80/100 big, 90/100 quant")
     print(f"Done. Found {len(all_coins)}")
@@ -102,8 +101,7 @@ def main():
     lagos_hour = now_lagos.hour
     print(f"Lagos time: {now_lagos.strftime('%H:%M')} - Hour {lagos_hour}")
 
-    # FIXED ALIVE: window 65 mins - fixes your missed since midnight
-    if lagos_hour % 3 == 0 and now_lagos.minute < 65:
+    if lagos_hour % 3 == 0:
         send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos")
 
     if not all_coins:
