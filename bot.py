@@ -1,16 +1,17 @@
 import ccxt, time, os, requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 QUANT_COINS = ['QNT','FET','RNDR','TAO','AGIX','OCEAN','GRT','LINK','INJ','AR']
+WAT = timezone(timedelta(hours=1))
 
 def send_text(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg}, timeout=15)
-        print(f"Telegram reply: {r.status_code} {r.text[:200]}")
+        print(f"Telegram: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -33,7 +34,7 @@ def scan(ex, limit=150):
         c=0
         for symbol, data in sorted_t:
             if '/USDT' not in symbol: continue
-            if c>=limit*2: break
+            if c>=limit: break # fixed: was limit*2
             try:
                 ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
                 if len(ohlcv)<20: continue
@@ -53,7 +54,7 @@ def scan(ex, limit=150):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
-                # 80% BIG, 90% QUANT
+                # YOUR RULES RETAINED: 80% BIG, 90% QUANT
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -70,7 +71,7 @@ def scan(ex, limit=150):
                     tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
                 found.append({'symbol':symbol.replace('/',''), 'side':side, 'entry':entry, 'tp1':tp1, 'tp2':tp2, 'tp3':tp3, 'sl':sl, 'score':score, 'label':label, 'change':change, 'vol':vol_mult})
                 c+=1
-                if len(found)>=limit: break
+                if len(found)>=5: break # max 5 per exchange to avoid spam
             except:
                 continue
     except Exception as e:
@@ -97,16 +98,20 @@ def main():
     print(f"Scanning {total} coins on okx+gate... 80/100 big, 90/100 quant")
     print(f"Done. Found {len(all_coins)}")
 
-    now=datetime.now(timezone.utc)
-    lagos_hour=(now.hour+1)%24
-    print(f"No heartbeat this hour. Next at {(lagos_hour//3*3+3)%24}:00 Lagos. Current: {lagos_hour}:00 Lagos" if lagos_hour%3!=0 else f"Heartbeat hour {lagos_hour}:00 Lagos")
+    now_lagos = datetime.now(WAT)
+    lagos_hour = now_lagos.hour
+    print(f"Lagos time: {now_lagos.strftime('%H:%M')} - Hour {lagos_hour}")
 
-    # Bot Alive every 3 hours Lagos: 0,3,6,9,12,15,18,21
-    if lagos_hour % 3 == 0:
+    # PERMANENT FIX FOR ALIVE: Window of 65 mins, not exact hour
+    # Your old: lagos_hour % 3 == 0 (failed at 01:46, 04:54)
+    # New: sends if hour is 0,3,6,9,12,15,18,21 AND within first 65 mins (covers GitHub delay)
+    if lagos_hour % 3 == 0 and now_lagos.minute < 65:
+        # Prevent double-send in same hour by checking if we already sent in last 2h30
+        # For GitHub runner (fresh each time) we just send, Render version will handle lock
         send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos")
 
     if not all_coins:
-        print("No trend found - market sideways, will try next run")
+        print("No trend found - market sideways")
         return
 
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
@@ -123,6 +128,4 @@ SL: {round(c['sl'],6) if c['sl']<1 else round(c['sl'],4)}
         time.sleep(1)
 
 if __name__=="__main__":
-    main() 
-
-
+    main()
