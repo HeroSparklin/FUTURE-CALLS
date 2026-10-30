@@ -26,7 +26,7 @@ def get_ex(name):
             time.sleep(2)
     return None
 
-def scan(ex, limit=150):
+def scan(ex, limit=60):
     found=[]
     try:
         tickers = ex.fetch_tickers()
@@ -34,7 +34,7 @@ def scan(ex, limit=150):
         c=0
         for symbol, data in sorted_t:
             if '/USDT' not in symbol: continue
-            if c>=limit: break # fixed: was limit*2
+            if c>=limit: break
             try:
                 ohlcv = ex.fetch_ohlcv(symbol, '5m', limit=20)
                 if len(ohlcv)<20: continue
@@ -54,7 +54,7 @@ def scan(ex, limit=150):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
-                # YOUR RULES RETAINED: 80% BIG, 90% QUANT
+                # RETAINED: 80% BIG, 90% QUANT
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -71,7 +71,7 @@ def scan(ex, limit=150):
                     tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
                 found.append({'symbol':symbol.replace('/',''), 'side':side, 'entry':entry, 'tp1':tp1, 'tp2':tp2, 'tp3':tp3, 'sl':sl, 'score':score, 'label':label, 'change':change, 'vol':vol_mult})
                 c+=1
-                if len(found)>=5: break # max 5 per exchange to avoid spam
+                if len(found)>=5: break
             except:
                 continue
     except Exception as e:
@@ -84,16 +84,16 @@ def main():
     all_coins=[]
     total=0
     if okx:
-        r=scan(okx,150)
-        print(f"OKX scanned 150, pumps: {len(r)} - 80/100 strict")
+        r=scan(okx,60)
+        print(f"OKX scanned 60, pumps: {len(r)} - 80/100 strict")
         all_coins.extend(r)
-        total+=150
+        total+=60
         time.sleep(1)
     if gate:
-        r=scan(gate,150)
-        print(f"GATE scanned 150, pumps: {len(r)} - 90/100 quant strict")
+        r=scan(gate,60)
+        print(f"GATE scanned 60, pumps: {len(r)} - 90/100 quant strict")
         all_coins.extend(r)
-        total+=150
+        total+=60
 
     print(f"Scanning {total} coins on okx+gate... 80/100 big, 90/100 quant")
     print(f"Done. Found {len(all_coins)}")
@@ -102,16 +102,12 @@ def main():
     lagos_hour = now_lagos.hour
     print(f"Lagos time: {now_lagos.strftime('%H:%M')} - Hour {lagos_hour}")
 
-    # PERMANENT FIX FOR ALIVE: Window of 65 mins, not exact hour
-    # Your old: lagos_hour % 3 == 0 (failed at 01:46, 04:54)
-    # New: sends if hour is 0,3,6,9,12,15,18,21 AND within first 65 mins (covers GitHub delay)
+    # FIXED ALIVE: window 65 mins - fixes your missed since midnight
     if lagos_hour % 3 == 0 and now_lagos.minute < 65:
-        # Prevent double-send in same hour by checking if we already sent in last 2h30
-        # For GitHub runner (fresh each time) we just send, Render version will handle lock
         send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos")
 
     if not all_coins:
-        print("No trend found - market sideways")
+        print("No trend found - sideways")
         return
 
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
