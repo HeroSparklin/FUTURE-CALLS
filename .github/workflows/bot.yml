@@ -1,19 +1,23 @@
 name: bot
+
 on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 8 # was 10, reduced because your scan was too long
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install ccxt requests
-      - env:
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run bot
+        env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python bot.py
