@@ -11,20 +11,18 @@ def send_text(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         r = requests.post(url, json={"chat_id": CHAT_ID, "text": msg}, timeout=15)
-        print(f"Telegram: {r.status_code}")
+        print(f"Telegram sent: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
 def get_ex(name):
-    for _ in range(2):
-        try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 20000})
-            ex.load_markets()
-            return ex
-        except Exception as e:
-            print(f"{name} init fail: {e}")
-            time.sleep(2)
-    return None
+    try:
+        ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
+        ex.load_markets()
+        return ex
+    except Exception as e:
+        print(f"{name} init fail: {e}")
+        return None
 
 def scan(ex, limit=40):
     found=[]
@@ -54,6 +52,7 @@ def scan(ex, limit=40):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
+                # RETAINED YOUR LOGIC
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -84,28 +83,27 @@ def main():
     total=0
     if okx:
         r=scan(okx,40)
-        print(f"OKX scanned 40, pumps: {len(r)} - 80/100 strict")
+        print(f"OKX scanned 40, pumps: {len(r)}")
         all_coins.extend(r)
         total+=40
         time.sleep(1)
     if gate:
         r=scan(gate,40)
-        print(f"GATE scanned 40, pumps: {len(r)} - 90/100 quant strict")
+        print(f"GATE scanned 40, pumps: {len(r)}")
         all_coins.extend(r)
         total+=40
 
-    print(f"Scanning {total} coins on okx+gate... 80/100 big, 90/100 quant")
-    print(f"Done. Found {len(all_coins)}")
-
     now_lagos = datetime.now(WAT)
     lagos_hour = now_lagos.hour
-    print(f"Lagos time: {now_lagos.strftime('%H:%M')} - Hour {lagos_hour}")
+    lagos_min = now_lagos.minute
+    print(f"Lagos: {now_lagos.strftime('%H:%M')} | Total {total} coins | Found {len(all_coins)}")
 
-    if lagos_hour % 3 == 0:
+    # FIXED: Only 1 Alive per 3 hours, first 10 mins of hour
+    if lagos_hour % 3 == 0 and lagos_min < 10:
         send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos")
 
     if not all_coins:
-        print("No trend found - sideways")
+        print("No trend - sideways")
         return
 
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
