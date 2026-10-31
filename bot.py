@@ -24,7 +24,7 @@ def get_ex(name):
         print(f"{name} init fail: {e}")
         return None
 
-def scan(ex, limit=40):
+def scan(ex, limit=30):
     found=[]
     try:
         tickers = ex.fetch_tickers()
@@ -52,7 +52,7 @@ def scan(ex, limit=40):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
-                # RETAINED YOUR LOGIC
+                # YOUR RETAINED LOGIC
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -82,25 +82,25 @@ def main():
     all_coins=[]
     total=0
     if okx:
-        r=scan(okx,40)
-        print(f"OKX scanned 40, pumps: {len(r)}")
+        r=scan(okx,30)
+        print(f"OKX scanned 30, pumps: {len(r)}")
         all_coins.extend(r)
-        total+=40
+        total+=30
         time.sleep(1)
     if gate:
-        r=scan(gate,40)
-        print(f"GATE scanned 40, pumps: {len(r)}")
+        r=scan(gate,30)
+        print(f"GATE scanned 30, pumps: {len(r)}")
         all_coins.extend(r)
-        total+=40
+        total+=30
 
     now_lagos = datetime.now(WAT)
     lagos_hour = now_lagos.hour
     lagos_min = now_lagos.minute
     print(f"Lagos: {now_lagos.strftime('%H:%M')} | Total {total} coins | Found {len(all_coins)}")
 
-    # FIXED: Only 1 Alive per 3 hours, first 10 mins of hour
-    if lagos_hour % 3 == 0 and lagos_min < 10:
-        send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos")
+    # FIXED: Your 00:39 run missed alive because minute <10. Now any minute in the hour sends alive.
+    if lagos_hour % 3 == 0:
+        send_text(f"✅ Bot Alive - {total}/300 active\nScanning OKX+GATE ({total} coins)\nBig: 80/100 | Quant: 90/100 | Time: {lagos_hour}:00 Lagos | Found: {len(all_coins)}")
 
     if not all_coins:
         print("No trend - sideways")
