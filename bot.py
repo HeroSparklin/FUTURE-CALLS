@@ -71,7 +71,6 @@ def analyze_tf(closes):
     return {"rsi":rsi, "macd":macd, "sig":sig, "hist":hist, "ema7":calc_ema(closes,7)[-1], "ema14":calc_ema(closes,14)[-1], "ema28":calc_ema(closes,28)[-1], "ema50":calc_ema(closes,50)[-1] if len(closes)>=50 else calc_ema(closes,28)[-1], "last":closes[-1]}
 
 def get_btc_trend(ex):
-    # BTC TREND FILTER for MAJOR/ALT/QUANT
     try:
         o1h = ex.fetch_ohlcv('BTC/USDT', '1h', limit=60)
         o4h = ex.fetch_ohlcv('BTC/USDT', '4h', limit=60)
@@ -107,45 +106,38 @@ def check_short(tf5, tf15, tf1h, tf4h, tf1d):
     return True
 
 def passes_filters(ex, symbol, category):
-    # VOL, ORDER BOOK DEPTH, SPREAD, FUNDING RATE
+    # FIXED: LOWERED DEPTH FROM 15k/20k TO 3k/5k
     try:
-        # 1. SPREAD FILTER
         ob = ex.fetch_order_book(symbol, 20)
         if not ob['bids'] or not ob['asks']: return False, "no orderbook"
         bid = ob['bids'][0][0]
         ask = ob['asks'][0][0]
         last = (bid+ask)/2
         spread_pct = (ask-bid)/last*100 if last else 99
-        if spread_pct > 0.6: return False, f"spread high {spread_pct:.2f}%"
+        if spread_pct > 0.8: return False, f"spread high {spread_pct:.2f}%"
 
-        # 2. ORDER BOOK DEPTH FILTER
-        bid_usd = sum(b[0]*b[1] for b in ob['bids'][:15])
-        ask_usd = sum(a[0]*a[1] for a in ob['asks'][:15])
-        min_depth = 15000 if category=="NEW" else 20000
+        bid_usd = sum(b[0]*b[1] for b in ob['bids'][:20])
+        ask_usd = sum(a[0]*a[1] for a in ob['asks'][:20])
+        min_depth = 3000 if category=="NEW" else 5000  # FIXED - WAS 15000/20000 TOO HIGH
         if bid_usd < min_depth and ask_usd < min_depth:
             return False, f"depth low ${int(bid_usd)}/${int(ask_usd)}"
 
-        # 3. FUNDING RATE FILTER (if exchange supports)
         try:
             if hasattr(ex, 'fetch_funding_rate'):
                 fr = ex.fetch_funding_rate(symbol)
                 funding = fr.get('fundingRate', 0) or 0
-                # Skip if funding too high = overcrowded
-                if abs(funding) > 0.0015: # 0.15%
+                if abs(funding) > 0.002:
                     return False, f"funding {funding*100:.3f}%"
-        except:
-            pass # funding not available for spot - skip filter
+        except: pass
 
-        return True, f"Spread {spread_pct:.2f}% Depth ${int(bid_usd):,} Fund OK"
+        return True, f"Spread {spread_pct:.2f}% Depth ${int(bid_usd):,}"
     except Exception as e:
-        # If filter fails, still allow if volume ok
         if "does not have market" in str(e):
             return False, str(e)
         return True, "filter skip"
 
 def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL", all_exs=[]):
     try:
-        # Try fallback ex if symbol not found
         cur_ex = ex
         for cand in all_exs:
             if not cand: continue
@@ -155,11 +147,9 @@ def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL
                     break
             except: continue
         
-        # FILTERS: vol, book, spread, funding
         ok, filter_info = passes_filters(cur_ex, symbol, category)
         if not ok:
             if "does not have market" in filter_info:
-                # try other ex
                 for cand in all_exs:
                     if cand==cur_ex or not cand: continue
                     try:
@@ -173,11 +163,6 @@ def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL
             if not ok:
                 print(f"filter {symbol} {filter_info}")
                 return None
-
-        # BTC TREND FILTER for MAJOR/ALT/QUANT (NEW listings ignore BTC)
-        if category in ["MAJOR","ALT","QUANT"]:
-            # LONG needs BTC not BEAR, SHORT needs BTC not BULL
-            pass # will check after direction
 
         o5m = cur_ex.fetch_ohlcv(symbol, '5m', limit=100); time.sleep(0.15)
         o15m = cur_ex.fetch_ohlcv(symbol, '15m', limit=100); time.sleep(0.15)
@@ -209,7 +194,6 @@ def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL
 
         last = c5[-1]; direction=None; lev=""; tp1=tp2=tp3=sl=0
         if check_long(tf5, tf15, tf1h, tf4h, tf1d):
-            # BTC TREND CHECK for LONG
             if category in ["MAJOR","ALT","QUANT"] and btc_trend=="BEAR":
                 print(f"BTC BEAR skip LONG {symbol}")
                 return None
@@ -219,7 +203,6 @@ def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL
             elif category=="MAJOR": lev="3x-5x Isolated"; tp1=last*1.05; tp2=last*1.11; tp3=last*1.22; sl=last*0.96
             else: lev="4x-6x Isolated"; tp1=last*1.07; tp2=last*1.16; tp3=last*1.32; sl=last*0.94
         elif check_short(tf5, tf15, tf1h, tf4h, tf1d):
-            # BTC TREND CHECK for SHORT
             if category in ["MAJOR","ALT","QUANT"] and btc_trend=="BULL":
                 print(f"BTC BULL skip SHORT {symbol}")
                 return None
@@ -270,11 +253,9 @@ def main():
     now_ts = int(datetime.now().timestamp())
     signals_sent = 0
 
-    # BTC TREND for filtering
     btc_trend = get_btc_trend(ex)
     print(f"BTC Trend {btc_trend}")
 
-    # 1. NEW LISTING
     for ex_name, ex_cur in [('GATE', ex_gate), ('MEXC', ex_mexc), ('OKX', ex_okx)]:
         if not ex_cur or signals_sent>=1: continue
         try:
@@ -300,7 +281,6 @@ def main():
                 except: continue
         except: continue
 
-    # 2. QUANT
     if signals_sent==0 and ex_gate:
         try:
             tickers = ex_gate.fetch_tickers()
@@ -318,7 +298,6 @@ def main():
                 except: continue
         except: pass
 
-    # 3. MAJOR
     if signals_sent==0:
         for symbol in MAJORS:
             if signals_sent>=1: break
@@ -327,7 +306,6 @@ def main():
                 key, msg = res
                 send_text(msg); seen.add(key); signals_sent+=1; break
 
-    # 4. ALT
     if signals_sent==0:
         for symbol in ALTS:
             if signals_sent>=1: break
@@ -336,16 +314,15 @@ def main():
                 key, msg = res
                 send_text(msg); seen.add(key); signals_sent+=1; break
 
-    # BOT ALIVE
     try:
         last_alive = load_alive()
         if signals_sent==0 and (now_ts-last_alive)>=21600:
-            send_text(f"✅ *4-IN-1 Bot Alive* Lagos {now_lagos.strftime('%H:%M %d/%m')}\nBTC Trend {btc_trend} | Scanning: NEW | QUANT | MAJOR | ALT | Filters: Vol+Depth+Spread+Funding+BTC | NO BYBIT")
+            send_text(f"✅ *4-IN-1 Bot Alive* Lagos {now_lagos.strftime('%H:%M %d/%m')}\nBTC Trend {btc_trend} | Scanning: NEW | QUANT | MAJOR | ALT | Filters: Vol+Depth+Spread+Funding+BTC | Depth FIXED $3k/$5k | NO BYBIT")
             save_alive(now_ts)
     except: pass
 
     save_seen(seen)
-    print(f"Done Lagos {now_lagos.strftime('%H:%M')} | BTC {btc_trend} | Signals {signals_sent} | NO BYBIT ALL FILTERS")
+    print(f"Done Lagos {now_lagos.strftime('%H:%M')} | BTC {btc_trend} | Signals {signals_sent} | NO BYBIT ALL FILTERS FIXED")
 
 if __name__=="__main__":
     main()
