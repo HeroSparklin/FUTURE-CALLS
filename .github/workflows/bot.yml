@@ -1,4 +1,4 @@
-name: Ultimate 80% Bot
+name: 4-in-1 Ultimate Bot
 on:
   schedule:
     - cron: '*/4 * * * *'
