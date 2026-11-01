@@ -34,6 +34,7 @@ def get_ex(name):
     try:
         ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 10000})
         ex.load_markets()
+        print(f"{name} loaded ok")
         return ex
     except Exception as e:
         print(f"{name} load err {e}")
@@ -116,9 +117,9 @@ def check_strict_short(tf5, tf15, tf1h, tf4h, tf1d):
 def process_symbol(ex, symbol, seen, is_new_listing, qv=0, dip=0, bid_usd=0, ask_usd=0, spread=0):
     try:
         o5m = ex.fetch_ohlcv(symbol, '5m', limit=100)
-        time.sleep(0.1)
+        time.sleep(0.15)
         o15m = ex.fetch_ohlcv(symbol, '15m', limit=100)
-        time.sleep(0.1)
+        time.sleep(0.15)
         try: o1h = ex.fetch_ohlcv(symbol, '1h', limit=100)
         except: o1h = []
         try: o4h = ex.fetch_ohlcv(symbol, '4h', limit=100)
@@ -142,7 +143,6 @@ def process_symbol(ex, symbol, seen, is_new_listing, qv=0, dip=0, bid_usd=0, ask
         tf1d = analyze_tf(c1d, is_new_listing) if c1d else None
         if not tf5 or not tf15: return None
 
-        # VOLUME 80% STRICT - Must have spike
         if v15 and len(v15)>=11:
             vol_avg = sum(v15[-11:-1])/10 if sum(v15[-11:-1])>0 else v15[-1]
             if vol_avg>0 and v15[-1] < vol_avg * 1.3: return None
@@ -154,7 +154,7 @@ def process_symbol(ex, symbol, seen, is_new_listing, qv=0, dip=0, bid_usd=0, ask
         direction=None; lev=""; tp1=tp2=tp3=sl=0; entry=last
 
         if is_new_listing:
-            if check_strict_long(tf5, tf15, tf1h, tf4h, tf1d) and -40 <= dip <= -10:
+            if check_strict_long(tf5, tf15, tf1h, tf4h, tf1d) and -45 <= dip <= -8:
                 direction="NEW LONG"; lev="5x-8x Isolated"; tp1=last*2.2; tp2=last*4.5; tp3=last*9.0; sl=last*0.70
             elif check_strict_short(tf5, tf15, tf1h, tf4h, tf1d) and dip <= -15:
                 direction="NEW SHORT"; lev="3x-5x Isolated"; tp1=last*0.55; tp2=last*0.30; tp3=last*0.15; sl=last*1.35
@@ -183,7 +183,7 @@ def process_symbol(ex, symbol, seen, is_new_listing, qv=0, dip=0, bid_usd=0, ask
 *TP1* {tp1:.6g} *TP2* {tp2:.6g} *TP3* {tp3:.6g}
 *SL* {sl:.6g} *Lev:* {lev}
 
-*TIME FRAME CHECK - MACD+RSI+EMA:*
+*TIME FRAME - MACD+RSI+EMA ALL TF:*
 ✅ 5m RSI {tf5['rsi']:.0f} MACD {tf5['macd']:.5f}>{tf5['sig']:.5f} HIST {tf5['hist']:.5f}
 ✅ 15m RSI {tf15['rsi']:.0f} MACD {tf15['macd']:.5f}>{tf15['sig']:.5f}
 ✅ 1h {tf1h_txt}
@@ -198,16 +198,17 @@ def process_symbol(ex, symbol, seen, is_new_listing, qv=0, dip=0, bid_usd=0, ask
 def main():
     ex_gate = get_ex('gate')
     ex_mexc = get_ex('mexc')
-    ex_binance = get_ex('binance')
-    if not ex_binance: ex_binance = ex_gate
-
+    ex_okx = get_ex('okx')
+    ex_bybit = get_ex('bybit')
+    ex_for_majors = ex_gate or ex_mexc or ex_okx or ex_bybit
+    
     seen = load_seen()
     now_lagos = datetime.now(WAT)
     now_ts = int(datetime.now().timestamp())
     signals_sent = 0
 
-    # 1. NEW LISTINGS - Will NOT break on error, will continue to next coin
-    for ex_name, ex in [('GATE', ex_gate), ('MEXC', ex_mexc)]:
+    # 1. NEW LISTINGS - GATE + MEXC + OKX (work on GitHub, no 451)
+    for ex_name, ex in [('GATE', ex_gate), ('MEXC', ex_mexc), ('OKX', ex_okx)]:
         if not ex or signals_sent>=1: continue
         try:
             tickers = ex.fetch_tickers()
@@ -219,18 +220,17 @@ def main():
                     qv = ticker.get('quoteVolume',0) or 0
                     last = ticker.get('last',0) or 0
                     if qv < 150000 or last==0 or last>5000: continue
-                    o1d_c = ex.fetch_ohlcv(symbol, '1d', limit=5)
-                    if len(o1d_c) >=3: continue
-                    # DIP calc from 5m
+                    try:
+                        o1d_c = ex.fetch_ohlcv(symbol, '1d', limit=5)
+                        if len(o1d_c) >=3: continue
+                    except: continue
                     try:
                         o5m_c = ex.fetch_ohlcv(symbol, '5m', limit=20)
                         if len(o5m_c) < 5: continue
                         first_high = max(c[2] for c in o5m_c[:6]) if len(o5m_c)>=6 else o5m_c[0][2]
                         dip = (last-first_high)/first_high*100 if first_high else 0
                     except: continue
-                    change = ticker.get('percentage',0) or 0
                     if not (-45 <= dip <= -8): continue
-                    # Orderbook check - will not break
                     try:
                         ob = ex.fetch_order_book(symbol,15)
                         bid_usd = sum(b[0]*b[1] for b in ob['bids'][:12])
@@ -239,7 +239,6 @@ def main():
                         spread = (ask-bid)/ask*100 if ask and bid else 0
                         if bid_usd < 15000 or spread > 1.2: continue
                     except: continue
-
                     res = process_symbol(ex, symbol, seen, True, qv, dip, bid_usd, ask_usd, spread)
                     if res:
                         key, msg = res
@@ -248,18 +247,19 @@ def main():
                         signals_sent+=1
                         break
                 except Exception as e:
-                    print(f"Inner loop {symbol} err {e}")
+                    print(f"Inner {symbol} err {e}")
                     continue
         except Exception as e:
             print(f"{ex_name} outer err {e}")
             continue
 
-    # 2. MAJORS - Only if no new listing, will NOT break
-    if signals_sent==0 and ex_binance:
+    # 2. MAJORS - Use GATE (not binance) to avoid 451
+    if signals_sent==0 and ex_for_majors:
+        ex = ex_for_majors
         for symbol in MAJORS:
             if signals_sent>=1: break
             try:
-                res = process_symbol(ex_binance, symbol, seen, False)
+                res = process_symbol(ex, symbol, seen, False)
                 if res:
                     key, msg = res
                     send_text(msg)
@@ -270,11 +270,11 @@ def main():
                 print(f"Major {symbol} err {e}")
                 continue
 
-    # BOT ALIVE - Every 6h, never breaks
+    # BOT ALIVE - Every 6h
     try:
         last_alive = load_alive()
         if signals_sent==0 and (now_ts-last_alive)>=21600:
-            send_text(f"✅ *ULTIMATE COMBINED 80% Bot Alive* Lagos {now_lagos.strftime('%H:%M %d/%m')}\nScanning: NEW (5hr+) + MAJOR + QUANT\nTF: 5m/15m/1h/4h/1D | RSI+MACD+EMA ALL | Entry/TP/SL OK\nNo breaking - All loops safe")
+            send_text(f"✅ *ULTIMATE 80% Bot Alive* Lagos {now_lagos.strftime('%H:%M %d/%m')}\nScanning: NEW (5hr+) + MAJOR | TF 5m/15m/1h/4h/1D | RSI+MACD+EMA ALL | Entry/TP/SL | NO BINANCE - Fixed 451")
             save_alive(now_ts)
     except: pass
 
