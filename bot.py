@@ -14,7 +14,6 @@ def send_text(msg):
 
 def get_ex(name):
     try:
-        # FAST MODE - disable rate limit
         ex = getattr(ccxt, name)({'enableRateLimit': False, 'timeout': 10000})
         ex.load_markets()
         return ex
@@ -46,6 +45,7 @@ def scan(ex, limit=20):
                 if vol_mult>=3.5: score+=10
                 if abs(change)>=3.8: score+=20
                 if abs(change)>=5.0: score+=20
+                # 80% strict + 90% strict QUANT
                 if is_quant:
                     if score<90: continue
                     label="90/100 QUANT"
@@ -58,7 +58,9 @@ def scan(ex, limit=20):
                 entry=last
                 if side=="LONG": tp1=entry*1.015; tp2=entry*1.03; tp3=entry*1.05; sl=entry*0.97
                 else: tp1=entry*0.985; tp2=entry*0.97; tp3=entry*0.95; sl=entry*1.03
-                found.append({'symbol':symbol.replace('/',''), 'side':side, 'entry':entry, 'tp1':tp1, 'tp2':tp2, 'tp3':tp3, 'sl':sl, 'score':score, 'label':label, 'change':change, 'vol':vol_mult})
+                # LEVERAGE LOGIC
+                leverage = "10x" if score>=95 else "5x-10x" if score>=90 else "3x-5x"
+                found.append({'symbol':symbol.replace('/',''), 'side':side, 'entry':entry, 'tp1':tp1, 'tp2':tp2, 'tp3':tp3, 'sl':sl, 'score':score, 'label':label, 'change':change, 'vol':vol_mult, 'leverage':leverage})
             except: continue
     except Exception as e:
         print(f"{ex.id} error: {e}")
@@ -71,20 +73,21 @@ def main():
     if gate: r=scan(gate,20); all_coins.extend(r); total+=20
     now_lagos = datetime.now(WAT)
     print(f"Lagos: {now_lagos.strftime('%H:%M')} | Total {total} | Found {len(all_coins)}")
-    # ALWAYS send Alive in the 3h hour, any minute
     if now_lagos.hour % 3 == 0:
         send_text(f"✅ Bot Alive - {total}/300 active\nOKX+GATE {total} coins\n80/100 Big | 90/100 Quant | {now_lagos.hour}:00 Lagos")
     if not all_coins:
         print("No trend - sideways"); return
     for c in sorted(all_coins, key=lambda x: x['score'], reverse=True)[:2]:
         red="🔴" if c['side']=="SHORT" else "🟢"
-        caption=f"""🚀 FUTURE CALL 🚀
+        caption=f"""🚀 FUTURE CALL - Pump Detected 🚀
 Coin: {c['symbol']} ({c['label']})
-{red} {c['side']} | {c['score']}/100
+Signal: {red} {c['side']} | {c['score']}/100
+Leverage: {c['leverage']} Isolated
 Pump: {c['change']:.2f}% | Vol x{c['vol']:.1f}
-ENTRY: {round(c['entry'],4)}
-TP: {round(c['tp1'],4)} / {round(c['tp2'],4)} / {round(c['tp3'],4)}
-SL: {round(c['sl'],4)}"""
+ENTRY: {round(c['entry'],6) if c['entry']<1 else round(c['entry'],4)}
+TP1: {round(c['tp1'],6) if c['tp1']<1 else round(c['tp1'],4)} | TP2: {round(c['tp2'],6) if c['tp2']<1 else round(c['tp2'],4)} | TP3: {round(c['tp3'],6) if c['tp3']<1 else round(c['tp3'],4)}
+SL: {round(c['sl'],6) if c['sl']<1 else round(c['sl'],4)}
+"""
         send_text(caption)
 
 if __name__=="__main__": main()
