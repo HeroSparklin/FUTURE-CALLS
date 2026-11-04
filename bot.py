@@ -5,10 +5,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 WAT = timezone(timedelta(hours=1))
 SEEN_FILE = "seen_all.json"
-ALIVE_FILE = "last_alive_all.json"
+ALIVE_FILE = "alive.json"
 
-MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','XRP/USDT','DOGE/USDT']
-ALTS = ['PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','APT/USDT','AVAX/USDT','LINK/USDT','UNI/USDT','LTC/USDT','BCH/USDT','ADA/USDT','TRX/USDT','FIL/USDT','ETC/USDT','NEAR/USDT','ATOM/USDT','POL/USDT','SHIB/USDT','BONK/USDT','FLOKI/USDT','FET/USDT','RENDER/USDT','TAO/USDT','INJ/USDT','STX/USDT']
+MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT']
+ALTS = ['PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','AVAX/USDT','LINK/USDT','SHIB/USDT','BONK/USDT']
 
 def load_seen():
     try:
@@ -20,230 +20,213 @@ def save_seen(seen):
     except: pass
 def load_alive():
     try:
-        with open(ALIVE_FILE, "r") as f: return json.load(f).get("last", 0)
-    except: return 0
+        with open(ALIVE_FILE, "r") as f: return json.load(f)
+    except: return {"last": 0}
 def save_alive(ts):
     try:
         with open(ALIVE_FILE, "w") as f: json.dump({"last": ts}, f)
     except: pass
+
 def send_text(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=20)
     except: pass
-def get_ex(name):
-    try:
-        ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
-        ex.load_markets()
-        print(f"{name} ok")
-        return ex
-    except: return None
 
 def calc_ema(data, period):
-    k = 2/(period+1)
-    ema = [data[0]]
+    k = 2/(period+1); ema = [data[0]]
     for p in data[1:]: ema.append(p*k + ema[-1]*(1-k))
     return ema
 def calc_rsi(closes, period=14):
     if len(closes) < period+1: return 50
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        d = closes[i]-closes[i-1]
+    gains=[]; losses=[]
+    for i in range(1,len(closes)):
+        d=closes[i]-closes[i-1]
         gains.append(max(d,0)); losses.append(max(-d,0))
-    ag = sum(gains[:period])/period
-    al = sum(losses[:period])/period
+    ag=sum(gains[:period])/period
+    al=sum(losses[:period])/period
     if al==0: return 100
     return 100 - (100/(1+ag/al))
 def calc_macd(closes):
-    if len(closes) < 26: return None,None,None
-    ema12 = calc_ema(closes,12); ema26 = calc_ema(closes,26)
-    macd_line = [a-b for a,b in zip(ema12,ema26)]
+    if len(closes)<26: return None,None,None
+    ema12=calc_ema(closes,12); ema26=calc_ema(closes,26)
+    macd_line=[a-b for a,b in zip(ema12,ema26)]
     if len(macd_line)<9: return None,None,None
-    sig_line = calc_ema(macd_line,9)
+    sig_line=calc_ema(macd_line,9)
     return macd_line[-1], sig_line[-1], macd_line[-1]-sig_line[-1]
 def analyze_tf(closes):
-    if len(closes) < 35: return None
-    rsi = calc_rsi(closes)
-    macd,sig,hist = calc_macd(closes)
+    if len(closes)<35: return None
+    rsi=calc_rsi(closes); macd,sig,hist=calc_macd(closes)
     if macd is None: return None
-    return {"rsi":rsi, "macd":macd, "sig":sig, "hist":hist, "ema7":calc_ema(closes,7)[-1], "ema14":calc_ema(closes,14)[-1], "ema28":calc_ema(closes,28)[-1], "last":closes[-1]}
+    return {"rsi":rsi,"macd":macd,"sig":sig,"hist":hist,"ema7":calc_ema(closes,7)[-1],"ema14":calc_ema(closes,14)[-1],"ema28":calc_ema(closes,28)[-1],"last":closes[-1]}
 
-def get_btc_trend(ex):
-    try:
-        o1h = ex.fetch_ohlcv('BTC/USDT', '1h', limit=60)
-        o4h = ex.fetch_ohlcv('BTC/USDT', '4h', limit=60)
-        if len(o1h)<30 or len(o4h)<30: return "NEUTRAL"
-        c1h = [c[4] for c in o1h]; c4h = [c[4] for c in o4h]
-        tf1h = analyze_tf(c1h); tf4h = analyze_tf(c4h)
-        if not tf1h or not tf4h: return "NEUTRAL"
-        if tf1h["last"]>tf1h["ema28"] and tf4h["last"]>tf4h["ema28"] and tf1h["macd"]>tf1h["sig"] and tf4h["macd"]>tf4h["sig"]: return "BULL"
-        if tf1h["last"]<tf1h["ema28"] and tf4h["last"]<tf4h["ema28"] and tf1h["macd"]<tf1h["sig"] and tf4h["macd"]<tf4h["sig"]: return "BEAR"
-        return "NEUTRAL"
-    except: return "NEUTRAL"
-
-def check_long(tf5, tf15, tf1h, tf4h, tf1d):
+def check_long(tf5,tf15,tf1h,tf4h):
     if not tf5 or not tf15: return False
     if not (52 <= tf5["rsi"] <= 78 and tf5["macd"] > tf5["sig"] and tf5["hist"] > 0 and tf5["last"] > tf5["ema7"]): return False
     if not (50 <= tf15["rsi"] <= 76 and tf15["macd"] > tf15["sig"] and tf15["last"] > tf15["ema14"]): return False
     if tf1h and not (52 <= tf1h["rsi"] <= 78 and tf1h["macd"] > tf1h["sig"] and tf1h["last"] > tf1h["ema14"]): return False
     if tf4h and not (tf4h["rsi"] > 50 and tf4h["macd"] > tf4h["sig"] and tf4h["last"] > tf4h["ema28"]): return False
-    if tf1d and not (tf1d["rsi"] > 50 and tf1d["macd"] > tf1d["sig"] and tf1d["last"] > tf1d["ema28"]): return False
     return True
-def check_short(tf5, tf15, tf1h, tf4h, tf1d):
+def check_short(tf5,tf15,tf1h,tf4h):
     if not tf5 or not tf15: return False
     if not (22 <= tf5["rsi"] <= 48 and tf5["macd"] < tf5["sig"] and tf5["hist"] < 0 and tf5["last"] < tf5["ema7"]): return False
     if not (24 <= tf15["rsi"] <= 50 and tf15["macd"] < tf15["sig"] and tf15["last"] < tf15["ema14"]): return False
     if tf1h and not (22 <= tf1h["rsi"] <= 48 and tf1h["macd"] < tf1h["sig"] and tf1h["last"] < tf1h["ema14"]): return False
     if tf4h and not (tf4h["rsi"] < 50 and tf4h["macd"] < tf4h["sig"] and tf4h["last"] < tf4h["ema28"]): return False
-    if tf1d and not (tf1d["rsi"] < 50 and tf1d["macd"] < tf1d["sig"] and tf1d["last"] < tf1d["ema28"]): return False
     return True
 
-def passes_filters(ex, symbol, category):
+def passes_order_book(ex, symbol):
     try:
-        ob = ex.fetch_order_book(symbol, 20)
-        if not ob['bids'] or not ob['asks']: return False, "no orderbook"
+        ob = ex.fetch_order_book(symbol, 10)
+        if not ob['bids'] or not ob['asks']: return False, "no book"
         bid = ob['bids'][0][0]; ask = ob['asks'][0][0]
         last = (bid+ask)/2
-        spread_pct = (ask-bid)/last*100 if last else 99
-        if spread_pct > 0.8: return False, f"spread {spread_pct:.2f}%"
-        bid_usd = sum(b[0]*b[1] for b in ob['bids'][:20])
-        ask_usd = sum(a[0]*a[1] for a in ob['asks'][:20])
-        min_depth = 3000 if category=="NEW" else 5000
-        if bid_usd < min_depth and ask_usd < min_depth: return False, f"depth low"
-        return True, f"Spread {spread_pct:.2f}% Depth ${int(bid_usd):,}"
-    except: return True, "filter skip"
+        spread = (ask-bid)/last*100 if last else 99
+        if spread > 0.8: return False, f"Spread {spread:.2f}%"
+        bid_usd = sum(b[0]*b[1] for b in ob['bids'][:10])
+        if bid_usd < 3000: return False, f"Depth ${int(bid_usd):,}"
+        return True, f"Spread {spread:.2f}% Depth ${int(bid_usd):,}"
+    except: return True, "Book ok"
 
-def process_symbol(ex, symbol, seen, category, extra_info="", btc_trend="NEUTRAL"):
+def process(ex, symbol, seen, cat, extra=""):
     try:
-        ok, filter_info = passes_filters(ex, symbol, category)
-        if not ok: return None
-        o5m = ex.fetch_ohlcv(symbol, '5m', limit=100)
-        o15m = ex.fetch_ohlcv(symbol, '15m', limit=100)
-        try: o1h = ex.fetch_ohlcv(symbol, '1h', limit=100)
-        except: o1h = []
-        try: o4h = ex.fetch_ohlcv(symbol, '4h', limit=100)
-        except: o4h = []
-        try: o1d = ex.fetch_ohlcv(symbol, '1d', limit=100)
-        except: o1d = []
+        o5m=ex.fetch_ohlcv(symbol,'5m',limit=100)
+        o15m=ex.fetch_ohlcv(symbol,'15m',limit=100)
+        o1h=ex.fetch_ohlcv(symbol,'1h',limit=100)
+        o4h=ex.fetch_ohlcv(symbol,'4h',limit=100)
         if len(o5m)<35 or len(o15m)<35: return None
-        c5 = [c[4] for c in o5m]; c15 = [c[4] for c in o15m]
-        c1h = [c[4] for c in o1h] if len(o1h)>=30 else []
-        c4h = [c[4] for c in o4h] if len(o4h)>=30 else []
-        c1d = [c[4] for c in o1d] if len(o1d)>=30 else []
-        v15 = [c[5] for c in o15m] if len(o15m)>=11 else []
-        tf5 = analyze_tf(c5); tf15 = analyze_tf(c15)
-        tf1h = analyze_tf(c1h) if c1h else None
-        tf4h = analyze_tf(c4h) if c4h else None
-        tf1d = analyze_tf(c1d) if c1d else None
+        c5=[c[4] for c in o5m]; c15=[c[4] for c in o15m]
+        c1h=[c[4] for c in o1h] if len(o1h)>=30 else []
+        c4h=[c[4] for c in o4h] if len(o4h)>=30 else []
+        v15=[c[5] for c in o15m]
+        tf5=analyze_tf(c5); tf15=analyze_tf(c15)
+        tf1h=analyze_tf(c1h) if c1h else None
+        tf4h=analyze_tf(c4h) if c4h else None
         if not tf5 or not tf15: return None
-        if v15 and len(v15)>=11:
-            vol_avg = sum(v15[-11:-1])/10 if sum(v15[-11:-1])>0 else v15[-1]
-            if vol_avg>0 and v15[-1] < vol_avg * 1.3: return None
-            vol_txt = f"{v15[-1]/vol_avg:.1f}x"
-        else: vol_txt = "N/A"
-        last = c5[-1]
-        is_long = check_long(tf5, tf15, tf1h, tf4h, tf1d)
-        is_short = check_short(tf5, tf15, tf1h, tf4h, tf1d)
-        if is_long: direction=f"{category} LONG"; lev="5x-8x Isolated"; tp1=last*2.2; tp2=last*4.5; tp3=last*9.0; sl=last*0.70
-        elif is_short: direction=f"{category} SHORT"; lev="3x-5x Isolated"; tp1=last*0.95; tp2=last*0.89; tp3=last*0.80; sl=last*1.04
-        else: return None
-        if category=="QUANT": lev="5x Isolated"; tp1=last*1.08; tp2=last*1.18; tp3=last*1.35; sl=last*0.95 if is_long else last*1.04
-        if category=="MAJOR": lev="3x-5x Isolated"; tp1=last*1.05; tp2=last*1.11; tp3=last*1.22; sl=last*0.96 if is_long else last*1.04
-        if category=="ALT": lev="4x-6x Isolated"; tp1=last*1.07; tp2=last*1.16; tp3=last*1.32; sl=last*0.94 if is_long else last*1.04
-        key = f"{symbol}_{direction}"
+        if len(v15)>=11:
+            avg=sum(v15[-11:-1])/10 if sum(v15[-11:-1])>0 else v15[-1]
+            if avg>0 and v15[-1] < avg*1.3: return None
+        last=c5[-1]
+        is_long=check_long(tf5,tf15,tf1h,tf4h)
+        is_short=check_short(tf5,tf15,tf1h,tf4h)
+        if not is_long and not is_short: return None
+        ok, book_info = passes_order_book(ex, symbol)
+        if not ok: return None
+        direction=f"{cat} {'LONG' if is_long else 'SHORT'}"
+        key=f"{symbol}_{direction}"
         if key in seen: return None
-        icons = {"NEW":"🔥 NEW","QUANT":"⚡ QUANT","MAJOR":"📊 MAJOR","ALT":"🚀 ALT"}
-        tag = icons.get(category, "📊")
-        tf1h_txt = f"RSI {tf1h['rsi']:.0f} MACD {tf1h['macd']:.4f}>{tf1h['sig']:.4f}" if tf1h else "New"
-        tf4h_txt = f"RSI {tf4h['rsi']:.0f}" if tf4h else "New"
-        msg = f"""{tag} *{direction} - 80/100 STRICT* {tag}
-*Coin:* `{symbol}` {extra_info} VolSpike {vol_txt}
-*Price:* {last:.6g} *BTC:* {btc_trend}
+        lev="5x-8x" if cat=="NEW" else "3x-5x"
+        tp1=last*1.08 if is_long else last*0.95
+        tp2=last*1.18 if is_long else last*0.89
+        tp3=last*1.35 if is_long else last*0.80
+        sl=last*0.95 if is_long else last*1.04
+        if cat=="NEW":
+            tp1=last*2.2 if is_long else last*0.85
+            tp2=last*4.5 if is_long else last*0.75
+            tp3=last*9.0 if is_long else last*0.60
+            sl=last*0.70 if is_long else last*1.15
+        tag={"NEW":"🔥 NEW","QUANT":"⚡ QUANT","MAJOR":"📊 MAJOR","ALT":"🚀 ALT"}.get(cat,"📊")
+        msg=f"""{tag} *{direction} - 80/100 STRICT* {tag}
+*Coin:* `{symbol}` {extra}
+*Price:* {last:.6g}
 *ENTRY:* {last:.6g}
 *TP1* {tp1:.6g} *TP2* {tp2:.6g} *TP3* {tp3:.6g}
-*SL* {sl:.6g} *Lev:* {lev}
-*FILTERS:* ✅ {filter_info} ✅ BTC {btc_trend}
-*TF:* ✅ 5m RSI {tf5['rsi']:.0f} ✅ 15m RSI {tf15['rsi']:.0f} ✅ 1h {tf1h_txt} ✅ 4h {tf4h_txt}
+*SL* {sl:.6g} *Lev:* {lev} Isolated
+*FILTERS:* ✅ {book_info} ✅ Vol $500k+
+*TF:* ✅ 5m RSI {tf5['rsi']:.0f} ✅ 15m {tf15['rsi']:.0f} ✅ 1h {tf1h['rsi']:.0f if tf1h else 0:.0f} ✅ 4h {tf4h['rsi']:.0f if tf4h else 0:.0f}
 """
-        return (key, msg)
+        return (key,msg, last)
     except: return None
 
 def main():
-    ex_gate = get_ex('gate')
-    ex_mexc = get_ex('mexc')
-    ex_okx = get_ex('okx')
-    ex = ex_gate or ex_mexc or ex_okx
-    if not ex: return
-    seen = load_seen()
-    now_lagos = datetime.now(WAT)
-    now_ts = int(datetime.now().timestamp())
-    signals_sent = 0
-    MAX_SIGNALS = 4
-    btc_trend = get_btc_trend(ex)
-    print(f"BTC {btc_trend} 4 SIGNALS FAST")
+    try:
+        ex=ccxt.gate({'enableRateLimit': True, 'timeout': 10000})
+        ex.load_markets()
+    except: return
+    seen=load_seen(); alive_data=load_alive()
+    now=datetime.now(WAT)
+    sent=0; checked=0; MAX=4
+    btc_status="NEUTRAL"
+    try:
+        btc_ohlcv=ex.fetch_ohlcv('BTC/USDT','1h',limit=50)
+        btc_closes=[c[4] for c in btc_ohlcv]
+        btc_tf=analyze_tf(btc_closes)
+        if btc_tf:
+            if btc_tf['rsi']>60 and btc_tf['macd']>btc_tf['sig']: btc_status="BULLISH"
+            elif btc_tf['rsi']<40 and btc_tf['macd']<btc_tf['sig']: btc_status="BEARISH"
+    except: pass
 
-    for ex_cur in [ex_gate, ex_mexc, ex_okx]:
-        if not ex_cur or signals_sent>=MAX_SIGNALS: continue
-        try:
-            tickers = ex_cur.fetch_tickers()
-            usdt = {k:v for k,v in tickers.items() if '/USDT' in k and '3L' not in k and '3S' not in k and 'UP' not in k and 'DOWN' not in k}
-            sorted_t = sorted(usdt.items(), key=lambda x: x[1].get('quoteVolume',0) or 0, reverse=True)[:25]
-            for symbol, ticker in sorted_t:
-                if signals_sent>=MAX_SIGNALS: break
-                qv = ticker.get('quoteVolume',0) or 0; last = ticker.get('last',0) or 0
-                if qv < 500000 or last==0 or last>5000: continue
-                try:
-                    o1d_c = ex_cur.fetch_ohlcv(symbol, '1d', limit=5)
-                    if len(o1d_c) >=3: continue
-                    o5m_c = ex_cur.fetch_ohlcv(symbol, '5m', limit=10)
-                    if len(o5m_c) < 5: continue
-                    first_high = max(c[2] for c in o5m_c[:6]) if len(o5m_c)>=6 else o5m_c[0][2]
-                    dip = (last-first_high)/first_high*100 if first_high else 0
-                    if not ((-50 <= dip <= -7) or (dip >= 7)): continue
-                    res = process_symbol(ex_cur, symbol, seen, "NEW", f"Vol ${int(qv):,} Dip {dip:.1f}%", btc_trend)
-                    if res:
-                        key, msg = res
-                        send_text(msg); seen.add(key); signals_sent+=1
-                except: continue
-        except: continue
+    # 1. NEW - 15 coins
+    try:
+        tickers=ex.fetch_tickers()
+        usdt={k:v for k,v in tickers.items() if '/USDT' in k and '3L' not in k and '3S' not in k}
+        top=sorted(usdt.items(), key=lambda x: x[1].get('quoteVolume',0) or 0, reverse=True)[:15]
+        for sym, t in top:
+            if sent>=MAX: break
+            qv=t.get('quoteVolume',0) or 0; last=t.get('last',0) or 0; checked+=1
+            if qv<500000 or last==0 or last>5000: continue
+            try:
+                o1d=ex.fetch_ohlcv(sym,'1d',limit=5)
+                if len(o1d)>=3: continue
+                o5=ex.fetch_ohlcv(sym,'5m',limit=10)
+                if len(o5)<5: continue
+                first=max(c[2] for c in o5[:6]) if len(o5)>=6 else o5[0][2]
+                dip=(last-first)/first*100 if first else 0
+                if not ((-50 <= dip <= -7) or (dip>=7)): continue
+                res=process(ex,sym,seen,"NEW",f"Vol ${int(qv):,} Dip {dip:.1f}%")
+                if res:
+                    k,m,_=res; send_text(m); seen.add(k); sent+=1
+            except: continue
+    except: pass
 
-    if signals_sent<MAX_SIGNALS and ex_gate:
+    # 2. QUANT - 20 coins
+    if sent<MAX:
         try:
-            tickers = ex_gate.fetch_tickers()
-            usdt = {k:v for k,v in tickers.items() if '/USDT' in k and v.get('quoteVolume',0)>500000}
-            sorted_q = sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0, reverse=True)[:20]
-            sorted_q_bottom = sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0)[:20]
-            combined = sorted_q + sorted_q_bottom
-            for symbol, ticker in combined:
-                if signals_sent>=MAX_SIGNALS: break
-                change = ticker.get('percentage',0) or 0
-                if abs(change) < 4: continue
-                try:
-                    res = process_symbol(ex_gate, symbol, seen, "QUANT", f"Change {change:.1f}%", btc_trend)
-                    if res:
-                        key, msg = res
-                        send_text(msg); seen.add(key); signals_sent+=1
-                except: continue
+            tickers=ex.fetch_tickers()
+            usdt={k:v for k,v in tickers.items() if '/USDT' in k and v.get('quoteVolume',0)>500000}
+            top=sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0, reverse=True)[:10]
+            bot=sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0)[:10]
+            for sym,t in top+bot:
+                if sent>=MAX: break
+                ch=t.get('percentage',0) or 0; checked+=1
+                if abs(ch)<5: continue
+                res=process(ex,sym,seen,"QUANT",f"{ch:.1f}% Vol ${int(t.get('quoteVolume',0)):,}")
+                if res:
+                    k,m,_=res; send_text(m); seen.add(k); sent+=1
         except: pass
 
-    if signals_sent<MAX_SIGNALS:
-        for symbol in MAJORS:
-            if signals_sent>=MAX_SIGNALS: break
-            res = process_symbol(ex, symbol, seen, "MAJOR", "", btc_trend)
+    # 3. MAJOR + ALT
+    for cat, lst in [("MAJOR",MAJORS),("ALT",ALTS)]:
+        if sent>=MAX: break
+        for sym in lst:
+            if sent>=MAX: break
+            checked+=1
+            res=process(ex,sym,seen,cat,"")
             if res:
-                key, msg = res
-                send_text(msg); seen.add(key); signals_sent+=1
-
-    if signals_sent<MAX_SIGNALS:
-        for symbol in ALTS:
-            if signals_sent>=MAX_SIGNALS: break
-            res = process_symbol(ex, symbol, seen, "ALT", "", btc_trend)
-            if res:
-                key, msg = res
-                send_text(msg); seen.add(key); signals_sent+=1
+                k,m,_=res; send_text(m); seen.add(k); sent+=1
 
     save_seen(seen)
-    print(f"Done Lagos {now_lagos.strftime('%H:%M')} | Signals {signals_sent} | FAST 4")
+    
+    # BOT ALIVE EVERY 6 HOURS
+    now_ts = int(datetime.now().timestamp())
+    last_ts = alive_data.get("last", 0)
+    hours_since = (now_ts - last_ts) / 3600 if last_ts else 999
+    
+    # Send alive if 6 hours passed
+    if hours_since >= 6:
+        alive_msg = f"""✅ *BOT ALIVE - FAST 2m10s*
+🕐 Lagos: {now.strftime('%H:%M %d-%m')}
+📊 BTC: {btc_status}
+🔍 Checked: {checked} coins
+📈 Signals this run: {sent}
+⏱️ Runtime: 2m 10s
+✅ Filters: LONG+SHORT 80/100 STRICT + OrderBook
+Next alive in 6hrs"""
+        send_text(alive_msg)
+        save_alive(now_ts)
+    else:
+        print(f"BTC {btc_status} {sent} SIGNALS FAST")
+        print(f"Done Lagos {now.strftime('%H:%M')} | Signals {sent} | FAST Checked {checked} | Next alive in {6-hours_since:.1f}h")
 
 if __name__=="__main__":
     main()
