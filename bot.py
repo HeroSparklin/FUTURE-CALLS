@@ -110,6 +110,7 @@ def process(ex, symbol, seen, cat, extra=""):
         is_long=check_long(tf5,tf15,tf1h,tf4h)
         is_short=check_short(tf5,tf15,tf1h,tf4h)
         if not is_long and not is_short: return None
+        # ORDER BOOK ONLY AFTER SIGNAL - FAST + SAME QUALITY
         ok, book_info = passes_order_book(ex, symbol)
         if not ok: return None
         direction=f"{cat} {'LONG' if is_long else 'SHORT'}"
@@ -156,7 +157,6 @@ def main():
             elif btc_tf['rsi']<40 and btc_tf['macd']<btc_tf['sig']: btc_status="BEARISH"
     except: pass
 
-    # 1. NEW - 15 coins
     try:
         tickers=ex.fetch_tickers()
         usdt={k:v for k,v in tickers.items() if '/USDT' in k and '3L' not in k and '3S' not in k}
@@ -179,7 +179,6 @@ def main():
             except: continue
     except: pass
 
-    # 2. QUANT - 20 coins
     if sent<MAX:
         try:
             tickers=ex.fetch_tickers()
@@ -195,7 +194,6 @@ def main():
                     k,m,_=res; send_text(m); seen.add(k); sent+=1
         except: pass
 
-    # 3. MAJOR + ALT
     for cat, lst in [("MAJOR",MAJORS),("ALT",ALTS)]:
         if sent>=MAX: break
         for sym in lst:
@@ -206,13 +204,10 @@ def main():
                 k,m,_=res; send_text(m); seen.add(k); sent+=1
 
     save_seen(seen)
-    
-    # BOT ALIVE EVERY 6 HOURS
     now_ts = int(datetime.now().timestamp())
     last_ts = alive_data.get("last", 0)
     hours_since = (now_ts - last_ts) / 3600 if last_ts else 999
     
-    # Send alive if 6 hours passed
     if hours_since >= 6:
         alive_msg = f"""✅ *BOT ALIVE - FAST 2m10s*
 🕐 Lagos: {now.strftime('%H:%M %d-%m')}
@@ -225,8 +220,7 @@ Next alive in 6hrs"""
         send_text(alive_msg)
         save_alive(now_ts)
     else:
-        print(f"BTC {btc_status} {sent} SIGNALS FAST")
-        print(f"Done Lagos {now.strftime('%H:%M')} | Signals {sent} | FAST Checked {checked} | Next alive in {6-hours_since:.1f}h")
+        print(f"BTC {btc_status} {sent} SIGNALS FAST - Checked {checked}")
 
 if __name__=="__main__":
     main()
