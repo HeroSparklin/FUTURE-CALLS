@@ -1,19 +1,21 @@
 name: 4-in-1 Ultimate Bot
 on:
   schedule:
-        - cron: '*/4 * * * *'
+    - cron: '*/4 * * * *'
   workflow_dispatch:
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-            - run: pip install ccxt requests
-            - run: timeout 180 python bot.py
+      - name: Install
+        run: pip install ccxt requests
+      - name: Run
+        run: timeout 180 python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
