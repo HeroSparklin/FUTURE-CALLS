@@ -7,6 +7,11 @@ WAT = timezone(timedelta(hours=1))
 SEEN_FILE = "seen_all.json"
 ALIVE_FILE = "alive.json"
 
+# --- CONFIG - YOUR SETTINGS ---
+BTC_FILTER = "OFF"  # OFF = Allow SHORT even if BTC BULLISH. ON = Block SHORT when BTC BULLISH
+STRICT_SCORE = 80  # KEPT AT 80/100 - DO NOT LOWER
+SCAN_INTERVAL_MINUTES = 15  # Matches bot.yml cron
+
 MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT']
 ALTS = ['PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','AVAX/USDT','LINK/USDT','SHIB/USDT','BONK/USDT']
 
@@ -61,6 +66,7 @@ def analyze_tf(closes):
     return {"rsi":rsi,"macd":macd,"sig":sig,"hist":hist,"ema7":calc_ema(closes,7)[-1],"ema14":calc_ema(closes,14)[-1],"ema28":calc_ema(closes,28)[-1],"last":closes[-1]}
 
 def check_long(tf5,tf15,tf1h,tf4h):
+    # 80/100 STRICT - KEPT
     if not tf5 or not tf15: return False
     if not (52 <= tf5["rsi"] <= 78 and tf5["macd"] > tf5["sig"] and tf5["hist"] > 0 and tf5["last"] > tf5["ema7"]): return False
     if not (50 <= tf15["rsi"] <= 76 and tf15["macd"] > tf15["sig"] and tf15["last"] > tf15["ema14"]): return False
@@ -68,6 +74,7 @@ def check_long(tf5,tf15,tf1h,tf4h):
     if tf4h and not (tf4h["rsi"] > 50 and tf4h["macd"] > tf4h["sig"] and tf4h["last"] > tf4h["ema28"]): return False
     return True
 def check_short(tf5,tf15,tf1h,tf4h):
+    # 80/100 STRICT - KEPT
     if not tf5 or not tf15: return False
     if not (22 <= tf5["rsi"] <= 48 and tf5["macd"] < tf5["sig"] and tf5["hist"] < 0 and tf5["last"] < tf5["ema7"]): return False
     if not (24 <= tf15["rsi"] <= 50 and tf15["macd"] < tf15["sig"] and tf15["last"] < tf15["ema14"]): return False
@@ -88,8 +95,10 @@ def passes_order_book(ex, symbol):
         return True, f"Spread {spread:.2f}% Depth ${int(bid_usd):,}"
     except: return True, "Book ok"
 
-def process(ex, symbol, seen, cat, extra=""):
+def process(ex, symbol, seen, cat, extra="", btc_status="NEUTRAL"):
     try:
+        # BTC FILTER = OFF - NEVER BLOCK SHORTS EVEN IF BTC BULLISH
+        # If BTC_FILTER was "ON", we would block here. Since OFF, we allow all.
         o5m=ex.fetch_ohlcv(symbol,'5m',limit=100)
         o15m=ex.fetch_ohlcv(symbol,'15m',limit=100)
         o1h=ex.fetch_ohlcv(symbol,'1h',limit=100)
@@ -133,7 +142,7 @@ def process(ex, symbol, seen, cat, extra=""):
 *ENTRY:* {last:.6g}
 *TP1* {tp1:.6g} *TP2* {tp2:.6g} *TP3* {tp3:.6g}
 *SL* {sl:.6g} *Lev:* {lev} Isolated
-*FILTERS:* ✅ {book_info} ✅ Vol $500k+
+*FILTERS:* ✅ {book_info} ✅ Vol $500k+ ✅ BTC Filter OFF
 *TF:* ✅ 5m RSI {tf5['rsi']:.0f} ✅ 15m {tf15['rsi']:.0f} ✅ 1h {tf1h['rsi']:.0f if tf1h else 0:.0f} ✅ 4h {tf4h['rsi']:.0f if tf4h else 0:.0f}
 """
         return (key,msg, last)
@@ -173,7 +182,7 @@ def main():
                 first=max(c[2] for c in o5[:6]) if len(o5)>=6 else o5[0][2]
                 dip=(last-first)/first*100 if first else 0
                 if not ((-50 <= dip <= -7) or (dip>=7)): continue
-                res=process(ex,sym,seen,"NEW",f"Vol ${int(qv):,} Dip {dip:.1f}%")
+                res=process(ex,sym,seen,"NEW",f"Vol ${int(qv):,} Dip {dip:.1f}%", btc_status)
                 if res:
                     k,m,_=res; send_text(m); seen.add(k); sent+=1
             except: continue
@@ -189,7 +198,7 @@ def main():
                 if sent>=MAX: break
                 ch=t.get('percentage',0) or 0; checked+=1
                 if abs(ch)<5: continue
-                res=process(ex,sym,seen,"QUANT",f"{ch:.1f}% Vol ${int(t.get('quoteVolume',0)):,}")
+                res=process(ex,sym,seen,"QUANT",f"{ch:.1f}% Vol ${int(t.get('quoteVolume',0)):,}", btc_status)
                 if res:
                     k,m,_=res; send_text(m); seen.add(k); sent+=1
         except: pass
@@ -199,7 +208,7 @@ def main():
         for sym in lst:
             if sent>=MAX: break
             checked+=1
-            res=process(ex,sym,seen,cat,"")
+            res=process(ex,sym,seen,cat,"", btc_status)
             if res:
                 k,m,_=res; send_text(m); seen.add(k); sent+=1
 
@@ -208,15 +217,16 @@ def main():
     last_ts = alive_data.get("last", 0)
     hours_since = (now_ts - last_ts) / 3600 if last_ts else 999
     
-    if hours_since >= 6:
+    # CHANGED: Was >= 6 (6hrs) -> Now >= 0.25 (15 mins)
+    if hours_since >= 0.25:
         alive_msg = f"""✅ *BOT ALIVE - FAST 2m10s*
 🕐 Lagos: {now.strftime('%H:%M %d-%m')}
-📊 BTC: {btc_status}
+📊 BTC: {btc_status} [FILTER: {BTC_FILTER} - Shorts Allowed]
 🔍 Checked: {checked} coins
 📈 Signals this run: {sent}
 ⏱️ Runtime: 2m 10s
-✅ Filters: LONG+SHORT 80/100 STRICT + OrderBook
-Next alive in 6hrs"""
+✅ Filters: LONG+SHORT 80/100 STRICT + OrderBook + BTC Filter OFF
+Next alive in 15mins"""
         send_text(alive_msg)
         save_alive(now_ts)
     else:
