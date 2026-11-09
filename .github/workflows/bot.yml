@@ -9,6 +9,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Restore seen cache
+        uses: actions/cache@v4
+        with:
+          path: seen_all.json
+          key: seen-cache-v1
+          restore-keys: |
+            seen-cache-v1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -19,3 +26,9 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+      - name: Save seen cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: seen_all.json
+          key: seen-cache-v1-${{ github.run_id }}
