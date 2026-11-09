@@ -7,24 +7,20 @@ WAT = timezone(timedelta(hours=1))
 SEEN_FILE = "seen_all.json"
 ALIVE_FILE = "alive.json"
 
-# --- CONFIG - LOCKED SETTINGS - DO NOT CHANGE ---
-BTC_FILTER = "OFF"  # OFF = Allow SHORT even if BTC BULLISH
-STRICT_SCORE = 80  # KEPT AT 80/100 - DO NOT LOWER
-SCAN_INTERVAL_MINUTES = 15  # Scan every 15 mins
-SEEN_COOLDOWN_HOURS = 4  # Same signal blocked for 4hrs UNLESS price moves >2%
-PRICE_MOVE_OVERRIDE = 2.0  # % - If entry moved more than this, send again even within 4hrs
-# ALIVE = Every 4hrs (00, 04, 08, 12, 16, 20 Lagos) - based on clock, not file
+# --- CONFIG - LOCKED - DO NOT CHANGE ---
+BTC_FILTER = "OFF"
+STRICT_SCORE = 80
+SCAN_INTERVAL_MINUTES = 15
+SEEN_COOLDOWN_HOURS = 4
+PRICE_MOVE_OVERRIDE = 2.0  # Send again if entry moved >2%
 
 MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT']
-# 21 ALTS - EXPANDED FROM 10 TO 21 TO MAKE TOTAL 60 COINS
 ALTS = [
     'PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','AVAX/USDT','LINK/USDT','SHIB/USDT','BONK/USDT',
-    # 11 NEW ALTS ADDED:
     'DOGE/USDT','XRP/USDT','ADA/USDT','DOT/USDT','NEAR/USDT','APT/USDT','TIA/USDT','INJ/USDT','JUP/USDT','ONDO/USDT','HYPE/USDT'
 ]
 
 def load_seen():
-    # Returns dict { "ETH/USDT_MAJORS LONG": {"ts": 123456, "price": 3000.0} }
     try:
         with open(SEEN_FILE, "r") as f:
             data = json.load(f)
@@ -62,8 +58,6 @@ def save_seen(seen):
         pass
 
 def is_recently_seen(seen, key, current_price):
-    # BLOCK only if: same key <4hrs ago AND price moved <2%
-    # ALLOW if: direction flipped (different key) OR price moved >=2% OR older than 4hrs
     if key not in seen:
         return False
     try:
@@ -129,7 +123,6 @@ def analyze_tf(closes):
     return {"rsi":rsi,"macd":macd,"sig":sig,"hist":hist,"ema7":calc_ema(closes,7)[-1],"ema14":calc_ema(closes,14)[-1],"ema28":calc_ema(closes,28)[-1],"last":closes[-1]}
 
 def check_long(tf5,tf15,tf1h,tf4h):
-    # 80/100 STRICT - LOCKED
     if not tf5 or not tf15: return False
     if not (52 <= tf5["rsi"] <= 78 and tf5["macd"] > tf5["sig"] and tf5["hist"] > 0 and tf5["last"] > tf5["ema7"]): return False
     if not (50 <= tf15["rsi"] <= 76 and tf15["macd"] > tf15["sig"] and tf15["last"] > tf15["ema14"]): return False
@@ -137,7 +130,6 @@ def check_long(tf5,tf15,tf1h,tf4h):
     if tf4h and not (tf4h["rsi"] > 50 and tf4h["macd"] > tf4h["sig"] and tf4h["last"] > tf4h["ema28"]): return False
     return True
 def check_short(tf5,tf15,tf1h,tf4h):
-    # 80/100 STRICT - LOCKED
     if not tf5 or not tf15: return False
     if not (22 <= tf5["rsi"] <= 48 and tf5["macd"] < tf5["sig"] and tf5["hist"] < 0 and tf5["last"] < tf5["ema7"]): return False
     if not (24 <= tf15["rsi"] <= 50 and tf15["macd"] < tf15["sig"] and tf15["last"] < tf15["ema14"]): return False
@@ -160,7 +152,6 @@ def passes_order_book(ex, symbol):
 
 def process(ex, symbol, seen, cat, extra="", btc_status="NEUTRAL"):
     try:
-        # BTC FILTER = OFF - NEVER BLOCK SHORTS EVEN IF BTC BULLISH
         o5m=ex.fetch_ohlcv(symbol,'5m',limit=100)
         o15m=ex.fetch_ohlcv(symbol,'15m',limit=100)
         o1h=ex.fetch_ohlcv(symbol,'1h',limit=100)
@@ -276,8 +267,6 @@ def main():
     save_seen(seen)
     now_ts = int(datetime.now().timestamp())
     
-    # ALIVE EVERY 4HRS - Based on Lagos clock
-    # Fires at 00:xx, 04:xx, 08:xx, 12:xx, 16:xx, 20:xx Lagos time
     if now.hour % 4 == 0 and now.minute < 15:
         alive_msg = f"""✅ *BOT ALIVE - FAST 2m10s*
 🕐 Lagos: {now.strftime('%H:%M %d-%m')}
