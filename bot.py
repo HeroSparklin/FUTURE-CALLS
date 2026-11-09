@@ -1,4 +1,4 @@
-import ccxt, os, requests, json
+import ccxt, os, requests, json, time
 from datetime import datetime, timezone, timedelta
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -7,22 +7,85 @@ WAT = timezone(timedelta(hours=1))
 SEEN_FILE = "seen_all.json"
 ALIVE_FILE = "alive.json"
 
-# --- CONFIG - YOUR SETTINGS ---
-BTC_FILTER = "OFF"  # OFF = Allow SHORT even if BTC BULLISH. ON = Block SHORT when BTC BULLISH
+# --- CONFIG - LOCKED SETTINGS - DO NOT CHANGE ---
+BTC_FILTER = "OFF"  # OFF = Allow SHORT even if BTC BULLISH
 STRICT_SCORE = 80  # KEPT AT 80/100 - DO NOT LOWER
-SCAN_INTERVAL_MINUTES = 15  # Matches bot.yml cron
+SCAN_INTERVAL_MINUTES = 15  # Scan every 15 mins
+SEEN_COOLDOWN_HOURS = 4  # Same signal blocked for 4hrs UNLESS price moves >2%
+PRICE_MOVE_OVERRIDE = 2.0  # % - If entry moved more than this, send again even within 4hrs
+# ALIVE = Every 4hrs (00, 04, 08, 12, 16, 20 Lagos) - based on clock, not file
 
 MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT']
-ALTS = ['PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','AVAX/USDT','LINK/USDT','SHIB/USDT','BONK/USDT']
+# 21 ALTS - EXPANDED FROM 10 TO 21 TO MAKE TOTAL 60 COINS
+ALTS = [
+    'PEPE/USDT','WIF/USDT','ARB/USDT','OP/USDT','SUI/USDT','SEI/USDT','AVAX/USDT','LINK/USDT','SHIB/USDT','BONK/USDT',
+    # 11 NEW ALTS ADDED:
+    'DOGE/USDT','XRP/USDT','ADA/USDT','DOT/USDT','NEAR/USDT','APT/USDT','TIA/USDT','INJ/USDT','JUP/USDT','ONDO/USDT','HYPE/USDT'
+]
 
 def load_seen():
+    # Returns dict { "ETH/USDT_MAJORS LONG": {"ts": 123456, "price": 3000.0} }
     try:
-        with open(SEEN_FILE, "r") as f: return set(json.load(f))
-    except: return set()
+        with open(SEEN_FILE, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                now_ts = int(time.time())
+                return {k: {"ts": now_ts, "price": 0} for k in data}
+            if isinstance(data, dict):
+                cleaned = {}
+                for k, v in data.items():
+                    if isinstance(v, dict) and "ts" in v:
+                        cleaned[k] = v
+                    elif isinstance(v, (int, float)):
+                        cleaned[k] = {"ts": int(v), "price": 0}
+                    else:
+                        cleaned[k] = {"ts": int(time.time()), "price": 0}
+                return cleaned
+            return {}
+    except:
+        return {}
+
 def save_seen(seen):
     try:
-        with open(SEEN_FILE, "w") as f: json.dump(list(seen)[-1000:], f)
-    except: pass
+        now_ts = int(time.time())
+        cleaned = {}
+        for k, v in seen.items():
+            try:
+                ts = int(v.get("ts", 0)) if isinstance(v, dict) else int(v)
+                if now_ts - ts < 86400:
+                    cleaned[k] = v if isinstance(v, dict) else {"ts": ts, "price": 0}
+            except:
+                continue
+        with open(SEEN_FILE, "w") as f:
+            json.dump(cleaned, f)
+    except:
+        pass
+
+def is_recently_seen(seen, key, current_price):
+    # BLOCK only if: same key <4hrs ago AND price moved <2%
+    # ALLOW if: direction flipped (different key) OR price moved >=2% OR older than 4hrs
+    if key not in seen:
+        return False
+    try:
+        entry = seen[key]
+        if isinstance(entry, dict):
+            last_ts = int(entry.get("ts", 0))
+            last_price = float(entry.get("price", 0))
+        else:
+            last_ts = int(entry)
+            last_price = 0
+        now_ts = int(time.time())
+        if (now_ts - last_ts) >= (SEEN_COOLDOWN_HOURS * 3600):
+            return False
+        if last_price == 0 or current_price == 0:
+            return True
+        move = abs(current_price - last_price) / last_price * 100
+        if move >= PRICE_MOVE_OVERRIDE:
+            return False
+        return True
+    except:
+        return False
+
 def load_alive():
     try:
         with open(ALIVE_FILE, "r") as f: return json.load(f)
@@ -66,7 +129,7 @@ def analyze_tf(closes):
     return {"rsi":rsi,"macd":macd,"sig":sig,"hist":hist,"ema7":calc_ema(closes,7)[-1],"ema14":calc_ema(closes,14)[-1],"ema28":calc_ema(closes,28)[-1],"last":closes[-1]}
 
 def check_long(tf5,tf15,tf1h,tf4h):
-    # 80/100 STRICT - KEPT
+    # 80/100 STRICT - LOCKED
     if not tf5 or not tf15: return False
     if not (52 <= tf5["rsi"] <= 78 and tf5["macd"] > tf5["sig"] and tf5["hist"] > 0 and tf5["last"] > tf5["ema7"]): return False
     if not (50 <= tf15["rsi"] <= 76 and tf15["macd"] > tf15["sig"] and tf15["last"] > tf15["ema14"]): return False
@@ -74,7 +137,7 @@ def check_long(tf5,tf15,tf1h,tf4h):
     if tf4h and not (tf4h["rsi"] > 50 and tf4h["macd"] > tf4h["sig"] and tf4h["last"] > tf4h["ema28"]): return False
     return True
 def check_short(tf5,tf15,tf1h,tf4h):
-    # 80/100 STRICT - KEPT
+    # 80/100 STRICT - LOCKED
     if not tf5 or not tf15: return False
     if not (22 <= tf5["rsi"] <= 48 and tf5["macd"] < tf5["sig"] and tf5["hist"] < 0 and tf5["last"] < tf5["ema7"]): return False
     if not (24 <= tf15["rsi"] <= 50 and tf15["macd"] < tf15["sig"] and tf15["last"] < tf15["ema14"]): return False
@@ -98,7 +161,6 @@ def passes_order_book(ex, symbol):
 def process(ex, symbol, seen, cat, extra="", btc_status="NEUTRAL"):
     try:
         # BTC FILTER = OFF - NEVER BLOCK SHORTS EVEN IF BTC BULLISH
-        # If BTC_FILTER was "ON", we would block here. Since OFF, we allow all.
         o5m=ex.fetch_ohlcv(symbol,'5m',limit=100)
         o15m=ex.fetch_ohlcv(symbol,'15m',limit=100)
         o1h=ex.fetch_ohlcv(symbol,'1h',limit=100)
@@ -119,12 +181,11 @@ def process(ex, symbol, seen, cat, extra="", btc_status="NEUTRAL"):
         is_long=check_long(tf5,tf15,tf1h,tf4h)
         is_short=check_short(tf5,tf15,tf1h,tf4h)
         if not is_long and not is_short: return None
-        # ORDER BOOK ONLY AFTER SIGNAL - FAST + SAME QUALITY
         ok, book_info = passes_order_book(ex, symbol)
         if not ok: return None
         direction=f"{cat} {'LONG' if is_long else 'SHORT'}"
         key=f"{symbol}_{direction}"
-        if key in seen: return None
+        if is_recently_seen(seen, key, last): return None
         lev="5x-8x" if cat=="NEW" else "3x-5x"
         tp1=last*1.08 if is_long else last*0.95
         tp2=last*1.18 if is_long else last*0.89
@@ -184,7 +245,7 @@ def main():
                 if not ((-50 <= dip <= -7) or (dip>=7)): continue
                 res=process(ex,sym,seen,"NEW",f"Vol ${int(qv):,} Dip {dip:.1f}%", btc_status)
                 if res:
-                    k,m,_=res; send_text(m); seen.add(k); sent+=1
+                    k,m,price=res; send_text(m); seen[k]={"ts": int(time.time()), "price": float(price)}; sent+=1
             except: continue
     except: pass
 
@@ -200,7 +261,7 @@ def main():
                 if abs(ch)<5: continue
                 res=process(ex,sym,seen,"QUANT",f"{ch:.1f}% Vol ${int(t.get('quoteVolume',0)):,}", btc_status)
                 if res:
-                    k,m,_=res; send_text(m); seen.add(k); sent+=1
+                    k,m,price=res; send_text(m); seen[k]={"ts": int(time.time()), "price": float(price)}; sent+=1
         except: pass
 
     for cat, lst in [("MAJOR",MAJORS),("ALT",ALTS)]:
@@ -210,15 +271,14 @@ def main():
             checked+=1
             res=process(ex,sym,seen,cat,"", btc_status)
             if res:
-                k,m,_=res; send_text(m); seen.add(k); sent+=1
+                k,m,price=res; send_text(m); seen[k]={"ts": int(time.time()), "price": float(price)}; sent+=1
 
     save_seen(seen)
     now_ts = int(datetime.now().timestamp())
-    last_ts = alive_data.get("last", 0)
-    hours_since = (now_ts - last_ts) / 3600 if last_ts else 999
     
-    # CHANGED: Was >= 6 (6hrs) -> Now >= 0.25 (15 mins)
-    if hours_since >= 0.25:
+    # ALIVE EVERY 4HRS - Based on Lagos clock
+    # Fires at 00:xx, 04:xx, 08:xx, 12:xx, 16:xx, 20:xx Lagos time
+    if now.hour % 4 == 0 and now.minute < 15:
         alive_msg = f"""✅ *BOT ALIVE - FAST 2m10s*
 🕐 Lagos: {now.strftime('%H:%M %d-%m')}
 📊 BTC: {btc_status} [FILTER: {BTC_FILTER} - Shorts Allowed]
@@ -226,11 +286,11 @@ def main():
 📈 Signals this run: {sent}
 ⏱️ Runtime: 2m 10s
 ✅ Filters: LONG+SHORT 80/100 STRICT + OrderBook + BTC Filter OFF
-Next alive in 15mins"""
+Next alive in 4hrs"""
         send_text(alive_msg)
         save_alive(now_ts)
     else:
-        print(f"BTC {btc_status} {sent} SIGNALS FAST - Checked {checked}")
+        print(f"BTC {btc_status} {sent} SIGNALS FAST - Checked {checked} - Alive skipped")
 
 if __name__=="__main__":
     main()
