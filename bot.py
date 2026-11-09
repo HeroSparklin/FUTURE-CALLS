@@ -10,7 +10,7 @@ ALIVE_FILE = "alive.json"
 STRICT_SCORE = 80
 SEEN_COOLDOWN_HOURS = 4
 PRICE_MOVE_OVERRIDE = 2.0
-DEAD_HOURS_UTC = [1,2,3] # No trade 1am-4am UTC = 2am-5am Lagos
+DEAD_HOURS_UTC = [1,2,3]
 ADX_MIN = 20
 
 MAJORS = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT']
@@ -55,8 +55,12 @@ def is_recently_seen(seen,key,cur_price):
 def send_text(msg):
     try:
         url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id":CHAT_ID,"text":msg,"parse_mode":"Markdown"}, timeout=20)
-    except: pass
+        r=requests.post(url, json={"chat_id":CHAT_ID,"text":msg,"parse_mode":"Markdown"}, timeout=20)
+        print(f"TELEGRAM SEND: {r.status_code} {r.text[:200]}")
+        return r.status_code==200
+    except Exception as e:
+        print(f"TELEGRAM ERROR: {e}")
+        return False
 
 def calc_ema(data,p):
     k=2/(p+1); ema=[data[0]]
@@ -78,34 +82,26 @@ def calc_macd(c):
     sl=calc_ema(ml,9)
     return ml[-1],sl[-1],ml[-1]-sl[-1]
 def calc_adx(c, period=14):
-    # Simplified ADX - trend strength
     if len(c) < period+1: return 0
-    tr = []
-    for i in range(1,len(c)):
-        tr.append(abs(c[i]-c[i-1]))
-    atr = sum(tr[-period:])/period
-    # If price range is expanding = trending
-    up = c[-1] - c[-period]
-    adx = (abs(up) / (atr*period) * 100) if atr>0 else 0
-    return min(adx*2, 50) # normalized 0-50
+    tr=[]
+    for i in range(1,len(c)): tr.append(abs(c[i]-c[i-1]))
+    atr=sum(tr[-period:])/period
+    up=c[-1]-c[-period]
+    adx=(abs(up)/(atr*period)*100) if atr>0 else 0
+    return min(adx*2, 50)
 
 def analyze_tf(c):
     if len(c)<35: return None
     r=calc_rsi(c); m,s,h=calc_macd(c)
     if m is None: return None
-    adx = calc_adx(c)
+    adx=calc_adx(c)
     return {"rsi":r,"macd":m,"sig":s,"hist":h,"ema7":calc_ema(c,7)[-1],"ema14":calc_ema(c,14)[-1],"ema28":calc_ema(c,28)[-1],"last":c[-1],"adx":adx, "prev_rsi":calc_rsi(c[:-1])}
 
-# PERFECT 4 TF AGREE
 def check_long(t5,t15,t1,t4):
     if not t5 or not t15 or not t1 or not t4: return False
-    # 5m perfect
     if not (58<=t5["rsi"]<=72 and t5["macd"]>t5["sig"] and t5["hist"]>0 and t5["last"]>t5["ema7"] and t5["ema7"]>t5["ema14"] and t5["adx"]>=ADX_MIN): return False
-    # 15m perfect
     if not (55<=t15["rsi"]<=70 and t15["macd"]>t15["sig"] and t15["last"]>t15["ema14"] and t15["ema14"]>t15["ema28"] and t15["adx"]>=ADX_MIN): return False
-    # 1h perfect
     if not (55<=t1["rsi"]<=70 and t1["macd"]>t1["sig"] and t1["last"]>t1["ema14"] and t1["adx"]>=18): return False
-    # 4h perfect
     if not (50<=t4["rsi"]<=75 and t4["macd"]>t4["sig"] and t4["last"]>t4["ema28"] and t4["adx"]>=15): return False
     return True
 
@@ -151,7 +147,6 @@ def passes_order_book(ex,symbol,is_long):
         if spread>0.8: return False,f"Spread {spread:.2f}%",spread
         bid_usd=sum(b[0]*b[1] for b in ob['bids'][:10])
         if bid_usd<3000: return False,f"Depth ${int(bid_usd):,}",spread
-        # ORDER BOOK IMBALANCE - WHALE CHECK
         bid_vol=sum(b[1] for b in ob['bids'][:20])
         ask_vol=sum(a[1] for a in ob['asks'][:20])
         if is_long and bid_vol < ask_vol*1.2:
@@ -172,8 +167,8 @@ def is_alt_season_dynamic(ex):
                 alt_chs.append(t.get('percentage',0) or 0)
             except: pass
         avg_alt=sum(alt_chs)/len(alt_chs) if alt_chs else 0
-        is_alt = (avg_alt - btc_ch) > 4.5
-        info = f"ALT SEASON Alt {avg_alt:+.1f}% vs BTC {btc_ch:+.1f}%" if is_alt else f"BTC DOM Alt {avg_alt:+.1f}% vs BTC {btc_ch:+.1f}%"
+        is_alt=(avg_alt - btc_ch) > 4.5
+        info=f"ALT SEASON Alt {avg_alt:+.1f}% vs BTC {btc_ch:+.1f}%" if is_alt else f"BTC DOM Alt {avg_alt:+.1f}% vs BTC {btc_ch:+.1f}%"
         return is_alt, info, btc_ch, avg_alt
     except:
         return False, "BTC NEUTRAL", 0, 0
@@ -197,31 +192,23 @@ def process(ex,symbol,seen,cat,extra="",btc_status="NEUTRAL",is_alt_season=False
             if avg>0:
                 vol_ratio=v15[-1]/avg if v15[-1] else 1.0
                 if v15[-1] < avg*1.3: return None
-                if v15[-1] > avg*3.2: return None # VOLUME DIVERGENCE - exhausted pump
+                if v15[-1] > avg*3.2: return None
         last=c5[-1]
-        # RSI DIVERGENCE CHECK
-        if c5[-1] > c5[-2] and tf5["rsi"] < tf5["prev_rsi"] - 3: return None # bearish divergence
-        if c5[-1] < c5[-2] and tf5["rsi"] > tf5["prev_rsi"] + 3: return None # bullish divergence
-
+        if c5[-1] > c5[-2] and tf5["rsi"] < tf5["prev_rsi"] - 3: return None
+        if c5[-1] < c5[-2] and tf5["rsi"] > tf5["prev_rsi"] + 3: return None
         is_long=check_long(tf5,tf15,tf1h,tf4h)
         is_short=check_short(tf5,tf15,tf1h,tf4h)
         if not is_long and not is_short: return None
-
-        # BTC DYNAMIC CORRELATION
         if not is_alt_season:
             if btc_status=="BEARISH" and is_long and cat!="NEW": return None
             if btc_status=="BULLISH" and is_short and cat!="NEW": return None
-
         ok,book_info,spread=passes_order_book(ex,symbol,is_long)
         if not ok: return None
-
         direction=f"{cat} {'LONG' if is_long else 'SHORT'}"
         key=f"{symbol}_{direction}"
         if is_recently_seen(seen,key,last): return None
-        
         score,lev=calc_score_leverage(tf5,tf15,tf1h,tf4h,vol_ratio,spread,cat,is_long)
         if score<STRICT_SCORE: return None
-
         if cat=="NEW":
             tp1=last*2.2 if is_long else last*0.85
             tp2=last*4.5 if is_long else last*0.75
@@ -232,7 +219,6 @@ def process(ex,symbol,seen,cat,extra="",btc_status="NEUTRAL",is_alt_season=False
             tp2=last*1.18 if is_long else last*0.89
             tp3=last*1.35 if is_long else last*0.80
             sl=last*0.95 if is_long else last*1.04
-
         tag={"NEW":"🔥 NEW","QUANT":"⚡ QUANT","MAJOR":"📊 MAJOR","ALT":"🚀 ALT"}.get(cat,"📊")
         msg=f"""{tag} *{direction} - {score}/100* {tag}
 *Coin:* `{symbol}` {extra}
@@ -245,24 +231,30 @@ def process(ex,symbol,seen,cat,extra="",btc_status="NEUTRAL",is_alt_season=False
 *TF:* 5m{tf5['adx']:.0f} 15m{tf15['adx']:.0f} 1h{tf1h['adx']:.0f} 4h{tf4h['adx']:.0f} ADX ✅
 """
         return (key,msg,last)
-    except: return None
+    except Exception as e:
+        print(f"Process error {symbol}: {e}")
+        return None
 
 def main():
-    # TIME FILTER
     now_utc=datetime.now(timezone.utc)
-    if now_utc.hour in DEAD_HOURS_UTC:
-        print(f"Dead hours {now_utc.hour} UTC skip")
-        return
+    now=datetime.now(WAT)
+    print(f"==== BOT START {now.strftime('%Y-%m-%d %H:%M:%S')} Lagos | UTC {now_utc.hour}h ====")
+    print(f"BOT_TOKEN set: {bool(BOT_TOKEN)} CHAT_ID set: {bool(CHAT_ID)}")
 
+    if now_utc.hour in DEAD_HOURS_UTC:
+        print(f"Dead hours {now_utc.hour} UTC -> skip trading, send alive ping")
+        send_text(f"⏸️ Dead hours {now_utc.hour} UTC - Bot alive no trade - {now.strftime('%H:%M')} Lagos")
+        return
     try:
         ex=ccxt.gate({'enableRateLimit': True, 'timeout': 10000})
         ex.load_markets()
-    except: return
+        print("Exchange loaded")
+    except Exception as e:
+        print(f"Exchange load failed: {e}")
+        return
     seen=load_seen()
-    now=datetime.now(WAT)
+    print(f"Seen loaded: {len(seen)} coins")
     sent=0; checked=0; MAX=4
-
-    # BTC STATUS + DYNAMIC ALT SEASON
     btc_status="NEUTRAL"
     is_alt=False
     btc_info="BTC NEUTRAL"
@@ -273,12 +265,15 @@ def main():
             if btc_tf['rsi']>60 and btc_tf['macd']>btc_tf['sig']: btc_status="BULLISH"
             elif btc_tf['rsi']<40 and btc_tf['macd']<btc_tf['sig']: btc_status="BEARISH"
         is_alt, btc_info, btc_ch, alt_ch = is_alt_season_dynamic(ex)
-    except: pass
+        print(f"BTC STATUS: {btc_status} {btc_info} AltSeason={is_alt}")
+    except Exception as e:
+        print(f"BTC status error: {e}")
 
     try:
         tickers=ex.fetch_tickers()
         usdt={k:v for k,v in tickers.items() if '/USDT' in k and '3L' not in k and '3S' not in k}
         top=sorted(usdt.items(), key=lambda x: x[1].get('quoteVolume',0) or 0, reverse=True)[:15]
+        print(f"Scanning {len(top)} NEW coins")
         for sym,t in top:
             if sent>=MAX: break
             qv=t.get('quoteVolume',0) or 0; last=t.get('last',0) or 0; checked+=1
@@ -293,32 +288,42 @@ def main():
                 if not ((-50 <= dip <= -7) or (dip>=7)): continue
                 res=process(ex,sym,seen,"NEW",f"Vol ${int(qv):,} Dip {dip:.1f}% {btc_info}",btc_status,is_alt)
                 if res:
-                    k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1
-            except: continue
-    except: pass
+                    k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1; print(f"SENT NEW {sym}")
+            except Exception as e:
+                print(f"NEW scan err {sym}: {e}")
+                continue
+    except Exception as e:
+        print(f"NEW block error: {e}")
+
     if sent<MAX:
         try:
             tickers=ex.fetch_tickers()
             usdt={k:v for k,v in tickers.items() if '/USDT' in k and v.get('quoteVolume',0)>500000}
             top=sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0, reverse=True)[:10]
             bot=sorted(usdt.items(), key=lambda x: x[1].get('percentage',0) or 0)[:10]
+            print(f"Scanning QUANT {len(top)+len(bot)} coins")
             for sym,t in top+bot:
                 if sent>=MAX: break
                 ch=t.get('percentage',0) or 0; checked+=1
                 if abs(ch)<5: continue
                 res=process(ex,sym,seen,"QUANT",f"{ch:.1f}% Vol ${int(t.get('quoteVolume',0)):,} {btc_info}",btc_status,is_alt)
                 if res:
-                    k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1
-        except: pass
+                    k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1; print(f"SENT QUANT {sym}")
+        except Exception as e:
+            print(f"QUANT error: {e}")
+
     for cat,lst in [("MAJOR",MAJORS),("ALT",ALTS)]:
         if sent>=MAX: break
+        print(f"Scanning {cat} {len(lst)} coins")
         for sym in lst:
             if sent>=MAX: break
             checked+=1
             res=process(ex,sym,seen,cat,btc_info,btc_status,is_alt)
             if res:
-                k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1
+                k,m,p=res; send_text(m); seen[k]={"ts":int(time.time()),"price":float(p)}; sent+=1; print(f"SENT {cat} {sym}")
+
     save_seen(seen)
+    print(f"==== FINISH Checked:{checked} Sent:{sent} {btc_info} BTC:{btc_status} Alt:{is_alt} ====")
     if now.hour % 4 == 0 and now.minute < 15:
         send_text(f"✅ *BOT PERFECT - 6 FILTERS LOCKED*\n🕐 {now.strftime('%H:%M %d-%m')} Lagos | UTC {now_utc.hour}h\n📊 {btc_info} BTC:{btc_status} AltSeason:{is_alt}\n📈 Checked:{checked} Signals:{sent}\n🔒 ADX>{ADX_MIN} 4TF Imbal VolDiv Time")
 
