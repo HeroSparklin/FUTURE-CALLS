@@ -1,28 +1,47 @@
-name: 4-in-1 Ultimate Bot
+name: Gate 60-Coin Strict Bot - Dynamic Leverage
+
 on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
+
 jobs:
-  run:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Restore seen cache
-        uses: actions/cache@v4
-        with:
-          path: seen_all.json
-          key: seen-cache-v1
-          restore-keys: |
-            seen-cache-v1
-      - uses: actions/setup-python@v5
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - name: Install
-        run: pip install ccxt requests
-      - name: Run
-        run: python bot.py
+          
+      - name: Install deps
+        run: |
+          pip install ccxt requests
+
+      - name: Restore cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            seen_all.json
+            alive.json
+          key: bot-cache-v1-${{ github.run_number }}
+          restore-keys: |
+            bot-cache-v1-
+
+      - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          python bot.py
+
+      - name: Save cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            seen_all.json
+            alive.json
+          key: bot-cache-v1-${{ github.run_number }}
