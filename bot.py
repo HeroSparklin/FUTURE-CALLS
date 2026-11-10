@@ -1,6 +1,7 @@
 # BOT PERFECT - 8 FILTERS LOCKED - DYNAMIC BTC + RSI + ATR SL + PULLBACK ENTRY
 # LOCKED 10 Nov 2026 - DO NOT CHANGE WITHOUT INFORMING USER
 # MEXC Exchange
+# ALIVE: EVERY 4 HOURS LOCKED - 00,04,08,12,16,20 UTC = 01,05,09,13,17,21 Lagos
 
 import os, ccxt, time, requests, math
 from datetime import datetime, timezone
@@ -63,7 +64,7 @@ def rsi(ohlcv, period=14):
     except: return 50
 
 def atr(ohlcv, period=14):
-    # ATR 14 - LOCKED NEW for SL
+    # ATR 14 - LOCKED for SL
     try:
         trs=[]
         for i in range(1, len(ohlcv)):
@@ -126,7 +127,7 @@ def score_coin(symbol, cat, btc_status, alt_season):
     vr = vol_ratio(df_15m)
     if vr < 1.2: return None
 
-    # FILTER 4: Spread < 0.3% - LOOSENED LOCKED
+    # FILTER 4: Spread < 0.3% - LOCKED
     try:
         book = exchange.fetch_order_book(symbol, limit=5)
         bid = book['bids'][0][0]; ask = book['asks'][0][0]
@@ -139,24 +140,22 @@ def score_coin(symbol, cat, btc_status, alt_season):
     if direction == "LONG" and rsi15 > 72: return None
     if direction == "SHORT" and rsi15 < 28: return None
 
-    # FILTER 8: ENTRY TIMING - EMA 20 PULLBACK on 5m - LOCKED NEW
-    # Price must be within 0.8% of EMA 20 on 5m - don't chase
+    # FILTER 8: ENTRY TIMING - EMA 20 PULLBACK on 5m - LOCKED
     closes_5m = [c[4] for c in df_5m]
     ema20_5m = ema_calc(closes_5m, 20)
     price_5m = closes_5m[-1]
     dist = abs(price_5m - ema20_5m) / ema20_5m * 100
-    if dist > 0.8: return None  # Too far, missed move, wait for pullback
+    if dist > 0.8: return None
 
     # SCORE
     score = 25 + (25 if adx5>=25 else 15) + 20 + 15 + 10
     if score < 80: return None
 
     price = df_15m[-1][4]
-    # ATR SL - LOCKED NEW
+    # ATR SL - LOCKED
     atr15 = atr(df_15m, 14)
     if atr15 <= 0: atr15 = price * 0.01
     sl_dist = 1.5 * atr15
-    # Cap SL distance: min 0.8% max 3% to avoid crazy SL on super volatile coins
     sl_dist = max(sl_dist, price*0.008)
     sl_dist = min(sl_dist, price*0.03)
     if direction=="LONG":
@@ -176,10 +175,15 @@ def send_tg(text):
 def main():
     now = datetime.now(timezone.utc)
     hour = now.hour
-    print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback")
-    if hour == 0:
-        send_tg(f"🤖 Bot Alive - MEXC | Dead Hour | {now.strftime('%H:%M UTC')} | LOCKED 8 FILTERS")
-        return
+    print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback + Alive 4H")
+    # ALIVE EVERY 4 HOURS - LOCKED - NEVER CHANGE
+    # UTC: 00,04,08,12,16,20 | Lagos: 01,05,09,13,17,21
+    if hour % 4 == 0:
+        send_tg(f"🤖 Bot Alive - MEXC | {now.strftime('%H:%M UTC')} | {now.strftime('%H:%M Lagos')} Lagos | LOCKED 8 FILTERS - Alive Every 4H")
+        if hour == 0:
+            print("Dead Hour 00 UTC - Alive sent, stopping scan")
+            return
+        # For 04,08,12,16,20 -> Alive sent, CONTINUE scanning below
     btc_status, alt_season = get_btc_status()
     print(f"BTC STATUS: {btc_status} - DYNAMIC")
     checked=0; sent=0
