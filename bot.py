@@ -1,6 +1,5 @@
-# bot.py - FUTURE-CALLS - OKX FIX - No more 451
-# 60 coins | 80/100 | BTC Dynamic | 4hr Alive | 4hr + 2% Cooldown
-import os, json, time, ccxt, pandas as pd, numpy as np, requests
+# bot.py - FINAL FIX for 451/403 - MEXC edition
+import os, json, time, ccxt, pandas as pd, requests
 from datetime import datetime, timezone
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -10,42 +9,38 @@ BROADCAST_ID = os.getenv("TELEGRAM_BROADCAST_ID", "")
 SEEN_FILE = "seen.json"
 ALIVE_FILE = "last_alive.txt"
 
-MAJOR_ALT = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
-    "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "MATIC/USDT",
-    "NEAR/USDT", "APT/USDT", "ARB/USDT", "OP/USDT", "ATOM/USDT",
-    "LTC/USDT", "BCH/USDT", "FIL/USDT", "HBAR/USDT", "INJ/USDT",
-    "SUI/USDT", "SEI/USDT", "TIA/USDT", "PEPE/USDT", "WIF/USDT"
-]
-QUANT = [
-    "ENA/USDT", "PENDLE/USDT", "ONDO/USDT", "JUP/USDT", "STRK/USDT",
-    "ZK/USDT", "TAO/USDT", "RENDER/USDT", "FET/USDT", "IMX/USDT",
-    "MANTA/USDT", "ALT/USDT", "PYTH/USDT", "DYM/USDT", "BEAM/USDT",
-    "LDO/USDT", "AAVE/USDT", "UNI/USDT", "STX/USDT", "GALA/USDT"
-]
-NEW_EXTRA = [
-    "INIT/USDT", "EIGEN/USDT", "SCR/USDT", "DRIFT/USDT",
-    "ZRO/USDT", "LISTA/USDT", "ME/USDT", "MOVE/USDT", "S/USDT",
-    "BABY/USDT", "PUMP/USDT", "HYPE/USDT", "VIRTUAL/USDT", "AERO/USDT", "ATH/USDT"
-]
+MAJOR_ALT = ["BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT","DOGE/USDT","ADA/USDT","AVAX/USDT","LINK/USDT","DOT/USDT","MATIC/USDT","NEAR/USDT","APT/USDT","ARB/USDT","OP/USDT","ATOM/USDT","LTC/USDT","BCH/USDT","FIL/USDT","HBAR/USDT","INJ/USDT","SUI/USDT","SEI/USDT","TIA/USDT","PEPE/USDT","WIF/USDT"]
+QUANT = ["ENA/USDT","PENDLE/USDT","ONDO/USDT","JUP/USDT","STRK/USDT","ZK/USDT","TAO/USDT","RENDER/USDT","FET/USDT","IMX/USDT","MANTA/USDT","ALT/USDT","PYTH/USDT","DYM/USDT","BEAM/USDT","LDO/USDT","AAVE/USDT","UNI/USDT","STX/USDT","GALA/USDT"]
+NEW_EXTRA = ["INIT/USDT","EIGEN/USDT","SCR/USDT","DRIFT/USDT","ZRO/USDT","LISTA/USDT","ME/USDT","MOVE/USDT","S/USDT","BABY/USDT","PUMP/USDT","HYPE/USDT","VIRTUAL/USDT","AERO/USDT","ATH/USDT"]
 ALL_JOBS = [(s,"MAJOR/ALT") for s in MAJOR_ALT] + [(s,"QUANT") for s in QUANT] + [(s,"NEW") for s in NEW_EXTRA]
 
-# FIXED EXCHANGE - NO MORE BINANCE 451
-try:
-    exchange = ccxt.okx({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
-    exchange.load_markets()
-    print("Using OKX")
-except Exception as e:
-    print(f"OKX failed {e}, trying Bybit")
-    exchange = ccxt.bybit({'enableRateLimit': True, 'options': {'defaultType': 'linear'}})
-    print("Using BYBIT")
+def get_working_exchange():
+    candidates = [
+        ("mexc", ccxt.mexc({'enableRateLimit': True})),
+        ("kucoin", ccxt.kucoin({'enableRateLimit': True})),
+        ("gate", ccxt.gate({'enableRateLimit': True})),
+        ("bitget", ccxt.bitget({'enableRateLimit': True})),
+    ]
+    for name, ex in candidates:
+        try:
+            ex.load_markets()
+            ex.fetch_ticker("BTC/USDT")
+            print(f"Using {name.upper()} - WORKS!")
+            return ex
+        except Exception as e:
+            print(f"{name} failed {str(e)[:100]}")
+            continue
+    print("All failed, using MEXC anyway")
+    return ccxt.mexc({'enableRateLimit': True})
+
+exchange = get_working_exchange()
 
 def send_telegram(msg):
     if not TOKEN or not CHAT_ID: return
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     for cid in [CHAT_ID, BROADCAST_ID]:
         if not cid: continue
-        try: requests.post(url, json={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=10)
+        try: requests.post(url, json={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=15)
         except Exception as e: print(f"TG error {e}")
 
 def load_seen():
@@ -61,7 +56,6 @@ def should_send_alive():
     except: return True
 def mark_alive():
     with open(ALIVE_FILE,"w") as f: f.write(str(time.time()))
-
 def ema(s,p): return s.ewm(span=p, adjust=False).mean()
 def adx(df, period=14):
     try:
@@ -83,8 +77,7 @@ def get_ohlcv(symbol, tf, limit=100):
         df['ema7']=ema(df['close'],7); df['ema14']=ema(df['close'],14); df['ema28']=ema(df['close'],28)
         return df
     except Exception as e:
-        print(f"{symbol} {tf} err {e}")
-        return None
+        print(f"{symbol} {tf} err {e}"); return None
 
 def trend_of(df):
     if df is None or len(df)<30: return "NEUTRAL"
@@ -105,9 +98,7 @@ def is_alt_season():
         if not alt_vals: return False,0,btc_chg
         avg=sum(alt_vals)/len(alt_vals)
         return (avg-btc_chg)>4.5, avg, btc_chg
-    except Exception as e:
-        print(f"Alt season err {e}")
-        return False,0,0
+    except: return False,0,0
 
 def score_coin(symbol, cat, btc_status, alt_season):
     df_5m=get_ohlcv(symbol,"5m",100)
@@ -129,35 +120,28 @@ def score_coin(symbol, cat, btc_status, alt_season):
         ob=exchange.fetch_order_book(symbol, limit=10)
         bid=ob['bids'][0][0] if ob['bids'] else 0
         ask=ob['asks'][0][0] if ob['asks'] else 0
-        spread=(ask-bid)/bid if bid else 1
-        if spread>0.0015: return None
-        bid_vol=sum([b[1] for b in ob['bids']]); ask_vol=sum([a[1] for a in ob['asks']])
-        tot=bid_vol+ask_vol; imb=(bid_vol-ask_vol)/tot if tot else 0
-        if direction=="LONG" and imb<-0.15: return None
-        if direction=="SHORT" and imb>0.15: return None
-    except: return None
+        if bid and (ask-bid)/bid>0.002: return None
+    except: pass
     score=25+ (25 if adx5>30 else 15) +20+15+10+5
     if score<80: return None
     price=df_5m.iloc[-1]['close']
-    if direction=="LONG":
-        sl=price*0.985; tp1=price*1.02; tp2=price*1.04; tp3=price*1.06
-    else:
-        sl=price*1.015; tp1=price*0.98; tp2=price*0.96; tp3=price*0.94
+    if direction=="LONG": sl=price*0.985; tp1=price*1.02; tp2=price*1.04; tp3=price*1.06
+    else: sl=price*1.015; tp1=price*0.98; tp2=price*0.96; tp3=price*0.94
     return {"symbol":symbol,"direction":direction,"score":score,"price":price,"sl":sl,"tp1":tp1,"tp2":tp2,"tp3":tp3,"adx5":round(adx5,1),"adx15":round(adx15,1),"cat":cat}
 
 def format_signal(s):
     emoji="🟢" if s['direction']=="LONG" else "🔴"
-    return f"{emoji} <b>{s['symbol']} {s['direction']}</b> | {s['cat']}\nScore: {s['score']}/100 | ADX 5m {s['adx5']} 15m {s['adx15']}\nEntry: {s['price']:.5f}\nSL: {s['sl']:.5f} (-1.5%)\nTP1: {s['tp1']:.5f} (+2%)\nTP2: {s['tp2']:.5f} (+4%)\nTP3: {s['tp3']:.5f} (+6%)"
+    return f"{emoji} <b>{s['symbol']} {s['direction']}</b> | {s['cat']}\nScore: {s['score']}/100 | ADX {s['adx5']}/{s['adx15']}\nEntry: {s['price']:.5f}\nSL: {s['sl']:.5f}\nTP1: {s['tp1']:.5f} TP2: {s['tp2']:.5f} TP3: {s['tp3']:.5f}"
 
 def main():
-    now=datetime.now(timezone.utc); print(f"Run start UTC {now} Lagos {now.strftime('%H:%M')}")
+    now=datetime.now(timezone.utc); print(f"Run start UTC {now}")
     seen=load_seen(); btc_status,btc_price=get_btc_status(); alt_season,avg_alt,btc_chg=is_alt_season()
     print(f"BTC STATUS: {btc_status} AltSeason={alt_season}")
     if now.hour in [0,1]:
         if should_send_alive():
-            send_telegram(f"🤖 <b>Bot Alive</b>\nDead hours {now.hour} UTC - No trade\nBTC: {btc_status} ${btc_price:.0f} | AltSeason: {alt_season}")
+            send_telegram(f"🤖 <b>Bot Alive</b>\nDead hours {now.hour} UTC - No trade\nBTC: {btc_status} ${btc_price:.0f}")
             mark_alive()
-        print("Dead hours"); return
+        return
     sent=0
     for symbol,cat in ALL_JOBS:
         if symbol in seen:
@@ -165,22 +149,20 @@ def main():
             if hrs<4:
                 try:
                     cur=exchange.fetch_ticker(symbol)['last']
-                    if last.get("price") and abs(cur-last["price"])/last["price"]<0.02 and last.get("direction")!="DIFF":
-                        continue
+                    if last.get("price") and abs(cur-last["price"])/last["price"]<0.02: continue
                 except: continue
         res=score_coin(symbol,cat,btc_status,alt_season)
         if res:
             if symbol in seen:
                 prev=seen[symbol]; hrs=(time.time()-prev.get("time",0))/3600
-                if hrs<4 and prev.get("direction")==res['direction'] and abs(res['price']-prev.get("price",0))/prev.get("price",1)<0.02:
-                    print(f"{symbol} cooldown skip"); continue
+                if hrs<4 and prev.get("direction")==res['direction'] and abs(res['price']-prev.get("price",0))/prev.get("price",1)<0.02: continue
             send_telegram(format_signal(res))
             seen[symbol]={"time":time.time(),"price":res['price'],"direction":res['direction']}
-            sent+=1; print(f"SENT {symbol}")
+            sent+=1
     save_seen(seen)
     print(f"Checked:{len(ALL_JOBS)} Sent:{sent}")
     if should_send_alive() or sent>0:
-        send_telegram(f"🤖 <b>Bot Alive</b>\nChecked: {len(ALL_JOBS)} | Sent: {sent}\nBTC: {btc_status} ${btc_price:.0f} | AltSeason: {alt_season} | OKX\nTime: {datetime.now(timezone.utc).strftime('%H:%M')} UTC")
+        send_telegram(f"🤖 <b>Bot Alive - MEXC</b>\nChecked: {len(ALL_JOBS)} | Sent: {sent}\nBTC: {btc_status} ${btc_price:.0f} | Alt: {alt_season}")
         mark_alive()
 
 if __name__=="__main__": main()
