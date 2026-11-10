@@ -1,2 +1,4 @@
-ccxt
+ccxt==4.2.25
+pandas
+numpy
 requests
