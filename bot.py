@@ -1,4 +1,4 @@
-# bot.py - FINAL FIX for 451/403 - MEXC edition
+# bot.py - MEXC FINAL - bug fixed
 import os, json, time, ccxt, pandas as pd, requests
 from datetime import datetime, timezone
 
@@ -15,22 +15,15 @@ NEW_EXTRA = ["INIT/USDT","EIGEN/USDT","SCR/USDT","DRIFT/USDT","ZRO/USDT","LISTA/
 ALL_JOBS = [(s,"MAJOR/ALT") for s in MAJOR_ALT] + [(s,"QUANT") for s in QUANT] + [(s,"NEW") for s in NEW_EXTRA]
 
 def get_working_exchange():
-    candidates = [
-        ("mexc", ccxt.mexc({'enableRateLimit': True})),
-        ("kucoin", ccxt.kucoin({'enableRateLimit': True})),
-        ("gate", ccxt.gate({'enableRateLimit': True})),
-        ("bitget", ccxt.bitget({'enableRateLimit': True})),
-    ]
-    for name, ex in candidates:
+    for name, ex in [("mexc", ccxt.mexc({'enableRateLimit': True})), ("kucoin", ccxt.kucoin({'enableRateLimit': True})), ("gate", ccxt.gate({'enableRateLimit': True}))]:
         try:
             ex.load_markets()
             ex.fetch_ticker("BTC/USDT")
             print(f"Using {name.upper()} - WORKS!")
             return ex
         except Exception as e:
-            print(f"{name} failed {str(e)[:100]}")
+            print(f"{name} failed {str(e)[:80]}")
             continue
-    print("All failed, using MEXC anyway")
     return ccxt.mexc({'enableRateLimit': True})
 
 exchange = get_working_exchange()
@@ -41,21 +34,23 @@ def send_telegram(msg):
     for cid in [CHAT_ID, BROADCAST_ID]:
         if not cid: continue
         try: requests.post(url, json={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=15)
-        except Exception as e: print(f"TG error {e}")
+        except: pass
 
 def load_seen():
     try:
         with open(SEEN_FILE) as f: return json.load(f)
     except: return {}
 def save_seen(s):
-    with open(SEEN_FILE,"w") as f: json.dump(s,f)
+    import json as js
+    open(SEEN_FILE,"w").write(js.dumps(s))
 def should_send_alive():
     try:
         with open(ALIVE_FILE) as f: last=float(f.read().strip())
         return (time.time()-last)/3600 >= 4
     except: return True
 def mark_alive():
-    with open(ALIVE_FILE,"w") as f: f.write(str(time.time()))
+    open(ALIVE_FILE,"w").write(str(time.time()))
+
 def ema(s,p): return s.ewm(span=p, adjust=False).mean()
 def adx(df, period=14):
     try:
@@ -77,7 +72,8 @@ def get_ohlcv(symbol, tf, limit=100):
         df['ema7']=ema(df['close'],7); df['ema14']=ema(df['close'],14); df['ema28']=ema(df['close'],28)
         return df
     except Exception as e:
-        print(f"{symbol} {tf} err {e}"); return None
+        print(f"{symbol} {tf} err {e}")
+        return None
 
 def trend_of(df):
     if df is None or len(df)<30: return "NEUTRAL"
@@ -105,7 +101,8 @@ def score_coin(symbol, cat, btc_status, alt_season):
     df_15m=get_ohlcv(symbol,"15m",100)
     df_30m=get_ohlcv(symbol,"30m",100)
     df_4h=get_ohlcv(symbol,"4h",100)
-    if None in [df_5m,df_15m,df_30m,df_4h]: return None
+    if df_5m is None or df_15m is None or df_30m is None or df_4h is None:
+        return None
     t5=trend_of(df_5m); t15=trend_of(df_15m); t30=trend_of(df_30m); t4h=trend_of(df_4h)
     if not (t5==t15==t30==t4h and t5 in ["BULL","BEAR"]): return None
     direction="LONG" if t5=="BULL" else "SHORT"
@@ -116,12 +113,6 @@ def score_coin(symbol, cat, btc_status, alt_season):
     if adx5<20 or adx15<20: return None
     vol=df_5m.iloc[-1]['volume']; vol_avg=df_5m['volume'].rolling(20).mean().iloc[-1]
     if vol < vol_avg*1.2: return None
-    try:
-        ob=exchange.fetch_order_book(symbol, limit=10)
-        bid=ob['bids'][0][0] if ob['bids'] else 0
-        ask=ob['asks'][0][0] if ob['asks'] else 0
-        if bid and (ask-bid)/bid>0.002: return None
-    except: pass
     score=25+ (25 if adx5>30 else 15) +20+15+10+5
     if score<80: return None
     price=df_5m.iloc[-1]['close']
@@ -135,11 +126,11 @@ def format_signal(s):
 
 def main():
     now=datetime.now(timezone.utc); print(f"Run start UTC {now}")
-    seen=load_seen(); btc_status,btc_price=get_btc_status(); alt_season,avg_alt,btc_chg=is_alt_season()
+    seen=load_seen(); btc_status,btc_price=get_btc_status(); alt_season,_,_=is_alt_season()
     print(f"BTC STATUS: {btc_status} AltSeason={alt_season}")
     if now.hour in [0,1]:
         if should_send_alive():
-            send_telegram(f"🤖 <b>Bot Alive</b>\nDead hours {now.hour} UTC - No trade\nBTC: {btc_status} ${btc_price:.0f}")
+            send_telegram(f"🤖 <b>Bot Alive</b>\nDead hours {now.hour} UTC\nBTC: {btc_status} ${btc_price:.0f}")
             mark_alive()
         return
     sent=0
