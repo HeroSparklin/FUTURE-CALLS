@@ -15,7 +15,7 @@ print(f"CHANNEL_ID set: {bool(CHANNEL_ID)}")
 
 MAJOR_ALT = ["BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT","DOGE/USDT","ADA/USDT","AVAX/USDT","LINK/USDT","DOT/USDT","POL/USDT","NEAR/USDT","APT/USDT","ARB/USDT","OP/USDT","ATOM/USDT","LTC/USDT","BCH/USDT","FIL/USDT","HBAR/USDT","INJ/USDT","SUI/USDT","SEI/USDT","TIA/USDT","PEPE/USDT","WIF/USDT"]
 QUANT = ["ENA/USDT","PENDLE/USDT","ONDO/USDT","JUP/USDT","STRK/USDT","ZK/USDT","TAO/USDT","RENDER/USDT","FET/USDT","IMX/USDT","MANTA/USDT","PYTH/USDT","DYM/USDT","BEAM/USDT","LDO/USDT","AAVE/USDT","UNI/USDT","STX/USDT","GALA/USDT","ARKM/USDT"]
-NEW = ["PUMP/USDT","HUMA/USDT","WCT/USDT","KERNEL/USDT","INIT/USDT","SIGN/USDT","PARTI/USDT","OBT/USDT","SOON/USDT","SXT/USDT"]
+NEW = ["PUMP/USDT","HUMA/USDT","WCT/USDT","KERNEL/USDT","INIT/USDT","SIGN/USDT","PARTI/USDT","SOON/USDT","SXT/USDT"]
 ALL_SYMBOLS = MAJOR_ALT + QUANT + NEW
 
 def get_cat(sym):
@@ -64,7 +64,6 @@ def rsi(ohlcv, period=14):
     except: return 50
 
 def atr(ohlcv, period=14):
-    # ATR 14 - LOCKED for SL
     try:
         trs=[]
         for i in range(1, len(ohlcv)):
@@ -108,26 +107,21 @@ def score_coin(symbol, cat, btc_status, alt_season):
     df_4h=get_ohlcv(symbol,"4h",100)
     if df_5m is None or df_15m is None or df_30m is None or df_4h is None: return None
 
-    # FILTER 1: 4 TF EMA 20/50 agree
     t5=trend_of(df_5m); t15=trend_of(df_15m); t30=trend_of(df_30m); t4h=trend_of(df_4h)
     if not (t5==t15==t30==t4h and t5 in ["BULL","BEAR"]): return None
     direction="LONG" if t5=="BULL" else "SHORT"
 
-    # DYNAMIC BTC - LOCKED
     if btc_status == "BEAR" and direction == "LONG": pass
     if btc_status == "BULL" and direction == "SHORT": pass
 
-    # FILTER 2: ADX Dynamic
     adx5=adx(df_5m); adx15=adx(df_15m)
     against_btc = (btc_status=="BEAR" and direction=="LONG") or (btc_status=="BULL" and direction=="SHORT")
     need_adx = 25 if against_btc else 20
     if adx5 < need_adx or adx15 < need_adx: return None
 
-    # FILTER 3: Volume 1.2x
     vr = vol_ratio(df_15m)
     if vr < 1.2: return None
 
-    # FILTER 4: Spread < 0.3% - LOCKED
     try:
         book = exchange.fetch_order_book(symbol, limit=5)
         bid = book['bids'][0][0]; ask = book['asks'][0][0]
@@ -135,24 +129,20 @@ def score_coin(symbol, cat, btc_status, alt_season):
         if spread > 0.3: return None
     except: spread = 0.1
 
-    # FILTER 7: RSI 72/28
     rsi15 = rsi(df_15m, 14)
     if direction == "LONG" and rsi15 > 72: return None
     if direction == "SHORT" and rsi15 < 28: return None
 
-    # FILTER 8: ENTRY TIMING - EMA 20 PULLBACK on 5m - LOCKED
     closes_5m = [c[4] for c in df_5m]
     ema20_5m = ema_calc(closes_5m, 20)
     price_5m = closes_5m[-1]
     dist = abs(price_5m - ema20_5m) / ema20_5m * 100
     if dist > 0.8: return None
 
-    # SCORE
     score = 25 + (25 if adx5>=25 else 15) + 20 + 15 + 10
     if score < 80: return None
 
     price = df_15m[-1][4]
-    # ATR SL - LOCKED
     atr15 = atr(df_15m, 14)
     if atr15 <= 0: atr15 = price * 0.01
     sl_dist = 1.5 * atr15
@@ -176,14 +166,11 @@ def main():
     now = datetime.now(timezone.utc)
     hour = now.hour
     print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback + Alive 4H")
-    # ALIVE EVERY 4 HOURS - LOCKED - NEVER CHANGE
-    # UTC: 00,04,08,12,16,20 | Lagos: 01,05,09,13,17,21
     if hour % 4 == 0:
-        send_tg(f"🤖 Bot Alive - MEXC | {now.strftime('%H:%M UTC')} | {now.strftime('%H:%M Lagos')} Lagos | LOCKED 8 FILTERS - Alive Every 4H")
+        send_tg(f"🤖 Bot Alive - MEXC | {now.strftime('%H:%M UTC')} | LOCKED 8 FILTERS - Alive Every 4H")
         if hour == 0:
             print("Dead Hour 00 UTC - Alive sent, stopping scan")
             return
-        # For 04,08,12,16,20 -> Alive sent, CONTINUE scanning below
     btc_status, alt_season = get_btc_status()
     print(f"BTC STATUS: {btc_status} - DYNAMIC")
     checked=0; sent=0
