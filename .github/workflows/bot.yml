@@ -23,25 +23,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Restore cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            seen.json
-            last_alive.txt
-          key: seen-cache-v1
-          restore-keys: seen-cache-
       - name: Run bot
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_BROADCAST_ID: ${{ secrets.TELEGRAM_BROADCAST_ID }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHANNEL_ID: ${{ secrets.TELEGRAM_BROADCAST_ID }}
         run: python bot.py
-      - name: Save cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            seen.json
-            last_alive.txt
-          key: seen-cache-v1-${{ github.run_id }}
