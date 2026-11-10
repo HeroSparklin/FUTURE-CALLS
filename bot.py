@@ -1,7 +1,8 @@
-# BOT PERFECT - 8 FILTERS LOCKED - DYNAMIC BTC + RSI + ATR SL + PULLBACK ENTRY
+# BOT PERFECT - 8 FILTERS LOCKED - DYNAMIC BTC + RSI + ATR SL + PULLBACK ENTRY + LEVERAGE BY SCORE
 # LOCKED 10 Nov 2026 - DO NOT CHANGE WITHOUT INFORMING USER
 # MEXC Exchange
 # ALIVE: EVERY 4 HOURS LOCKED - 00,04,08,12,16,20 UTC = 01,05,09,13,17,21 Lagos
+# LEVERAGE LOCKED: Score 95-100=15x, 90-94=10x, 80-89=5x - MAX 15x
 
 import os, ccxt, time, requests, math
 from datetime import datetime, timezone
@@ -100,6 +101,12 @@ def get_btc_status():
     if df is None: return "NEUTRAL", False
     return trend_of(df), False
 
+def get_leverage(score):
+    # LEVERAGE BY WINNING RATE (Score) - LOCKED - MAX 15x
+    if score >= 95: return 15
+    if score >= 90: return 10
+    return 5
+
 def score_coin(symbol, cat, btc_status, alt_season):
     df_5m=get_ohlcv(symbol,"5m",100)
     df_15m=get_ohlcv(symbol,"15m",100)
@@ -142,6 +149,8 @@ def score_coin(symbol, cat, btc_status, alt_season):
     score = 25 + (25 if adx5>=25 else 15) + 20 + 15 + 10
     if score < 80: return None
 
+    leverage = get_leverage(score)
+
     price = df_15m[-1][4]
     atr15 = atr(df_15m, 14)
     if atr15 <= 0: atr15 = price * 0.01
@@ -153,7 +162,7 @@ def score_coin(symbol, cat, btc_status, alt_season):
     else:
         sl = price + sl_dist; tp1 = price - sl_dist*1.5; tp2 = price - sl_dist*3
 
-    return {"symbol":symbol,"cat":cat,"direction":direction,"price":price,"score":score,"adx":round(adx5,1),"vol":round(vr,2),"spread":round(spread,3),"btc":btc_status,"rsi":round(rsi15,1),"atr":round(atr15,4),"pullback":round(dist,2),"sl":sl,"tp1":tp1,"tp2":tp2}
+    return {"symbol":symbol,"cat":cat,"direction":direction,"price":price,"score":score,"adx":round(adx5,1),"vol":round(vr,2),"spread":round(spread,3),"btc":btc_status,"rsi":round(rsi15,1),"atr":round(atr15,4),"pullback":round(dist,2),"sl":sl,"tp1":tp1,"tp2":tp2,"leverage":leverage}
 
 def send_tg(text):
     for cid in [CHAT_ID, CHANNEL_ID]:
@@ -165,7 +174,7 @@ def send_tg(text):
 def main():
     now = datetime.now(timezone.utc)
     hour = now.hour
-    print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback + Alive 4H")
+    print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback + Alive 4H + Leverage MAX 15x")
     if hour % 4 == 0:
         send_tg(f"🤖 Bot Alive - MEXC | {now.strftime('%H:%M UTC')} | LOCKED 8 FILTERS - Alive Every 4H")
         if hour == 0:
@@ -184,10 +193,11 @@ def main():
                    f"Score: {res['score']}/100 | ADX: {res['adx']} | RSI: {res['rsi']} | Vol: {res['vol']}x | Spread: {res['spread']}%\n"
                    f"BTC: {res['btc']} (Dynamic) | Pullback: {res['pullback']}% from EMA20 | ATR: {res['atr']}\n"
                    f"Entry: {res['price']:.4f}\n"
+                   f"Leverage: {res['leverage']}x\n"
                    f"SL: {res['sl']:.4f} (1.5x ATR) | TP1: {res['tp1']:.4f} (1.5R) | TP2: {res['tp2']:.4f} (3R)\n"
                    f"✅ BOT PERFECT - 8 FILTERS LOCKED")
             send_tg(msg)
-            print(f"SENT {res['symbol']} {res['direction']} {res['score']} RSI:{res['rsi']} Pull:{res['pullback']}%")
+            print(f"SENT {res['symbol']} {res['direction']} {res['score']} Lev:{res['leverage']}x RSI:{res['rsi']} Pull:{res['pullback']}%")
     print(f"FINISH Checked:{checked} Sent:{sent}")
 
 if __name__=="__main__":
