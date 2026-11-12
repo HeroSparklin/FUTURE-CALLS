@@ -13,10 +13,13 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install deps
-        run: pip install ccxt requests
+        run: pip install -r requirements.txt
       - name: Run bot
         run: python -u bot.py
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CHANNEL_ID: ${{ secrets.TELEGRAM_BROADCAST_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BROADCAST_ID: ${{ secrets.TELEGRAM_BROADCAST_ID }}
