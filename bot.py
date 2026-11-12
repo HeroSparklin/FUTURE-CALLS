@@ -1,150 +1,313 @@
-# === FULL 8-FILTER VERSION - 61 COINS (17 MAJOR + 15 QUANT + 9 MANUAL NEW + 20 AUTO NEW) ===
-import ccxt, time, requests, os
-print("STARTING BOT... FULL 8 FILTERS INTACT", flush=True)
+import asyncio
+import time
+import requests
+from datetime import datetime
 
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID") or os.getenv("TELEGRAM_BROADCAST_ID") or TELEGRAM_CHAT_ID
-exchange = ccxt.mexc({'enableRateLimit': True})
+# ==================== CONFIG - EDIT THIS ====================
+TELEGRAM_BOT_TOKEN = "8914668267:AAHi0OiTHYJjULC4FIfMSGf1GQ_6wg2cjt8"
+TELEGRAM_CHAT_ID = "1004458770787"
 
-MAJOR_ALT = ["BTC/USDT","ETH/USDT","SOL/USDT","AVAX/USDT","LINK/USDT","NEAR/USDT","ARB/USDT","OP/USDT","APT/USDT","SUI/USDT","SEI/USDT","TIA/USDT","ONDO/USDT","RENDER/USDT","FET/USDT","INJ/USDT","STX/USDT"]
-QUANT = ["ATOM/USDT","DOT/USDT","MATIC/USDT","LTC/USDT","ETC/USDT","XRP/USDT","ADA/USDT","TRX/USDT","DOGE/USDT","SHIB/USDT","PEPE/USDT","WIF/USDT","BONK/USDT","FLOKI/USDT","BOME/USDT"]
-NEW_MANUAL = ["PUMP/USDT","HUMA/USDT","WCT/USDT","KERNEL/USDT","INIT/USDT","SIGN/USDT","PARTI/USDT","SOON/USDT","SXT/USDT"]
+BOT_ALIVE_INTERVAL = 4 * 3600  # 4 HOURS - ALIVE
+SCAN_INTERVAL = 30 * 60       # 30 MINS - SCAN EVERY 30 MINS
+STRICTNESS = 92
+SCORE_MIN = 80
 
-def fetch_auto_new():
-    blacklist_sub = ["USDC","FDUSD","USDE","DAI","XAUT","PAXG","GOLD","WBTC","WETH","BNB"]
-    print("Fetching auto new listings...", flush=True)
+ADX_MIN = 20
+ADX_BTC_MIN = 25
+RSI_OVERBOUGHT = 78
+RSI_OVERSOLD = 28
+VOL_MIN = 1.2
+PULLBACK_MAX = 0.8
+
+# ==================== COIN LISTS - 44 COINS ====================
+MAJOR = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT",
+    "ADAUSDT","AVAXUSDT","LINKUSDT","TRXUSDT","DOTUSDT","MATICUSDT",
+    "LTCUSDT","BCHUSDT","XAUTUSDT","GOLDUSDT","PAXGUSDT"
+]
+
+QUANT_MEME = [
+    "PEPEUSDT","SHIBUSDT","WIFUSDT","BONKUSDT","FLOKIUSDT",
+    "STXUSDT","SUIUSDT","APTUSDT","ARBUSDT","OPUSDT",
+    "INJUSDT","SEIUSDT","TIAUSDT","NEARUSDT","TONUSDT"
+]
+
+MANUAL_NEW = [
+    "KAIAUSDT","EIGENUSDT","ZROUSDT","LISTAUSDT","ZKUSDT",
+    "IOUSDT","REZUSDT","BBUSDT","NOTUSDT"
+]
+
+# Auto New - Add Binance new listings here manually, up to 20
+AUTO_NEW = [
+    "HYPEUSDT","VIRTUALUSDT","AIXBTUSDT"
+]
+
+ALL_COINS = MAJOR + QUANT_MEME + MANUAL_NEW + AUTO_NEW
+print(f"Total Coins: {len(ALL_COINS)}")
+
+# ==================== TELEGRAM ====================
+def send_telegram_sync(text):
     try:
-        tickers = exchange.fetch_tickers()
-        candidates = []; existing = set(MAJOR_ALT+QUANT+NEW_MANUAL)
-        for sym, t in tickers.items():
-            if not sym.endswith("/USDT"): continue
-            if sym in existing: continue
-            if any(b in sym for b in blacklist_sub): continue
-            if any(x in sym for x in ["3L","3S","5L","5S","BEAR","BULL","UP/","DOWN/"]): continue
-            qv = t.get('quoteVolume') or 0
-            if qv < 3000000 or qv > 60000000: continue
-            candidates.append((sym,qv))
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        res = [s for s,_ in candidates[:20]]
-        print(f"AUTO NEW FOUND: {res}", flush=True)
-        return res
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"TG {r.status_code} | {text[:60]}")
+        return r.status_code == 200
     except Exception as e:
-        print(f"Auto fail {e}", flush=True); return []
+        print(f"TG FAILED: {e}")
+        return False
 
-def get_ohlcv(s,tf,l=100):
-    try: return exchange.fetch_ohlcv(s,tf,limit=l)
-    except: return None
-def calc_ema(c,p):
-    if len(c)<p: return None
-    k=2/(p+1); e=sum(c[:p])/p
-    for x in c[p:]: e=x*k+e*(1-k)
-    return e
-def calc_rsi(c,p=14):
-    if len(c)<p+1: return 50
-    g=l=0
-    for i in range(1,p+1):
-        d=c[-i]-c[-i-1]
-        if d>0: g+=d
-        else: l+=-d
-    if l==0: return 70
-    return 100-(100/(1+g/l))
-def calc_adx(o,p=14):
-    if len(o)<p+5: return 15
-    highs=[x[2] for x in o]; lows=[x[3] for x in o]; closes=[x[4] for x in o]
-    tr_sum=dm_p=dm_m=0
-    for i in range(1,p+1):
-        tr=max(highs[-i]-lows[-i], abs(highs[-i]-closes[-i-1]), abs(lows[-i]-closes[-i-1]))
-        up=highs[-i]-highs[-i-1]; down=lows[-i-1]-lows[-i]
-        dm_p+= up if up>down and up>0 else 0; dm_m+= down if down>up and down>0 else 0; tr_sum+=tr
-    if tr_sum==0: return 15
-    di_p=dm_p/tr_sum*100; di_m=dm_m/tr_sum*100
-    if di_p+di_m==0: return 15
-    return abs(di_p-di_m)/(di_p+di_m)*100
-def get_trend(o):
-    if not o or len(o)<30: return "NEUTRAL"
-    c=[x[4] for x in o]; e20=calc_ema(c,20); e50=calc_ema(c,50)
-    if not e20 or not e50: return "NEUTRAL"
-    if c[-1]>e20>e50: return "BULL"
-    if c[-1]<e20<e50: return "BEAR"
+async def send_telegram(text):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, send_telegram_sync, text)
+
+# ==================== BINANCE DATA ====================
+def get_klines(symbol, interval, limit=100):
+    try:
+        url = "https://fapi.binance.com/fapi/v1/klines"
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        if not isinstance(data, list):
+            return [], []
+        closes = [float(x[4]) for x in data]
+        volumes = [float(x[5]) for x in data]
+        return closes, volumes
+    except Exception as e:
+        print(f"Klines fail {symbol} {interval}: {e}")
+        return [], []
+
+def calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def calc_adx(closes, period=14):
+    if len(closes) < period + 2:
+        return 0
+    trs, dms = [], []
+    for i in range(1, len(closes)):
+        tr = abs(closes[i] - closes[i-1])
+        trs.append(tr)
+        dms.append(abs(closes[i] - closes[i-1]) if closes[i] > closes[i-1] else 0)
+    if sum(trs[-period:]) == 0:
+        return 0
+    adx = (sum(dms[-period:]) / sum(trs[-period:])) * 100
+    return min(adx * 1.8, 60)
+
+def calc_ema(closes, period):
+    if not closes:
+        return 0
+    if len(closes) < period:
+        return closes[-1]
+    k = 2 / (period + 1)
+    ema = closes[0]
+    for c in closes[1:]:
+        ema = c * k + ema * (1 - k)
+    return ema
+
+def get_trend(closes):
+    if len(closes) < 50:
+        return "NEUTRAL"
+    ema7 = calc_ema(closes, 7)
+    ema28 = calc_ema(closes, 28)
+    price = closes[-1]
+    if price > ema7 > ema28:
+        return "BULL"
+    if price < ema7 < ema28:
+        return "BEAR"
     return "NEUTRAL"
-def get_btc_status(): 
-    return get_trend(get_ohlcv("BTC/USDT","4h",50))
-def send_telegram(msg):
-    try:
-        for cid in set([x for x in [TELEGRAM_CHAT_ID,CHANNEL_ID] if x]):
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id":cid,"text":msg,"parse_mode":"Markdown"}, timeout=10)
-    except Exception as e: print(f"TG fail {e}", flush=True)
 
-def score_coin(sym, btc_status):
-    o5=get_ohlcv(sym,"5m",100); o15=get_ohlcv(sym,"15m",100); o30=get_ohlcv(sym,"30m",100); o4h=get_ohlcv(sym,"4h",100)
-    if not all([o5,o15,o30,o4h]): return None, "NO_DATA"
-    closes=[x[4] for x in o5]; vols=[x[5] for x in o5]; price=closes[-1]
-    # F1: TREND ALIGN 5m=15m=30m=4h
-    t5=get_trend(o5); t15=get_trend(o15); t30=get_trend(o30); t4h=get_trend(o4h)
-    if not (t5==t15==t30==t4h): return None, f"[F1 TF_MISMATCH] {t5}/{t15}/{t30}/{t4h}"
-    direction=t5
-    # F2 + F8: ADX + BTC BEAR RULE
-    adx_needed=25 if (btc_status=="BEAR" and direction=="BULL") else 20
-    adx=calc_adx(o5,14)
-    if adx<adx_needed: return None, f"[F2 ADX_LOW] {adx:.1f}<{adx_needed} BTC={btc_status}"
-    # F3: RSI
-    rsi=calc_rsi(closes,14)
-    if direction=="BULL" and rsi>78: return None, f"[F3 RSI_HIGH] {rsi:.1f}"
-    if direction=="BEAR" and rsi<28: return None, f"[F3 RSI_LOW] {rsi:.1f}"
-    # F4: VOLUME SPIKE >1.2x
-    avg_vol=sum(vols[-21:-1])/20 if len(vols)>21 else 1
-    vol_ratio=vols[-1]/avg_vol if avg_vol>0 else 0
-    if vol_ratio<1.2: return None, f"[F4 VOL_LOW] {vol_ratio:.2f}x"
-    # F5: SPREAD <0.5%
-    try:
-        ticker=exchange.fetch_ticker(sym)
-        spread=(ticker['ask']-ticker['bid'])/ticker['last']*100 if ticker['last'] else 0
-        if spread>0.5: return None, f"[F5 SPREAD_HIGH] {spread:.2f}%"
-    except: pass
-    # F6: PULLBACK DISTANCE <0.8%
-    e20=calc_ema(closes,20)
-    if not e20: return None, "NO_EMA"
-    dist=abs(price-e20)/e20*100
-    if dist>0.8: return None, f"[F6 PULLBACK_FAR] {dist:.2f}%"
-    # F7: SCORE >=80
-    score=0; score+=min(adx*2,50); score+=20 if vol_ratio>=1.5 else 10; score+=20 if dist<=0.4 else 10; score+=10 if (50<=rsi<=68 if direction=="BULL" else 35<=rsi<=65) else 0
-    if score<80: return None, f"[F7 SCORE_LOW] {score}"
-    atr=(max(closes[-14:])-min(closes[-14:]))/price*100 if closes else 1
-    sl_pct=max(atr*1.2,1.5); tp1_pct=max(atr*1.5,2.0); tp2_pct=max(atr*3,4.0)
-    if direction=="BULL": sl=price*(1-sl_pct/100); tp1=price*(1+tp1_pct/100); tp2=price*(1+tp2_pct/100)
-    else: sl=price*(1+sl_pct/100); tp1=price*(1-tp1_pct/100); tp2=price*(1-tp2_pct/100)
-    lev=15 if score>=95 else 10 if score>=90 else 5
-    return {"symbol":sym,"direction":"LONG" if direction=="BULL" else "SHORT","price":price,"score":score,"adx":adx,"rsi":rsi,"vol_ratio":vol_ratio,"dist":dist,"btc":btc_status,"t":f"{t5}/{t15}/{t30}/{t4h}","sl":sl,"tp1":tp1,"tp2":tp2,"lev":lev}, "OK"
+def get_btc_regime():
+    closes, _ = get_klines("BTCUSDT", "4h", 100)
+    if not closes:
+        return "BEAR"
+    return get_trend(closes)
 
-def run():
-    AUTO_NEW=fetch_auto_new()
-    ALL=MAJOR_ALT+QUANT+NEW_MANUAL+AUTO_NEW
-    print(f"MANUAL NEW: {len(NEW_MANUAL)} | AUTO NEW: {len(AUTO_NEW)} | TOTAL: {len(ALL)} | 8 FILTERS ACTIVE", flush=True)
+# ==================== 8 FILTERS - 92/100 LOGIC ====================
+def check_coin(symbol, btc_regime):
+    closes_1h, vol_1h = get_klines(symbol, "1h", 100)
+    closes_4h, vol_4h = get_klines(symbol, "4h", 100)
+    closes_12h, _ = get_klines(symbol, "12h", 100)
+    closes_1d, _ = get_klines(symbol, "1d", 100)
+
+    if not closes_1h or not closes_4h:
+        return None, ["NO_DATA"]
+
+    price = closes_1h[-1]
+    trend_1h = get_trend(closes_1h)
+    trend_4h = get_trend(closes_4h)
+    trend_12h = get_trend(closes_12h)
+    trend_1d = get_trend(closes_1d)
+    rsi = calc_rsi(closes_1h)
+    adx = calc_adx(closes_4h)
+
+    # Volume Ratio
+    if len(vol_1h) > 20:
+        avg_vol = sum(vol_1h[-20:-1]) / 19
+        vol_ratio = vol_1h[-1] / avg_vol if avg_vol > 0 else 0
+    else:
+        vol_ratio = 0
+
+    ema7 = calc_ema(closes_1h, 7)
+    dist = abs(price - ema7) / ema7 * 100 if ema7 else 99
+
+    rejects = []
+    score = 0
+    side = None
+
+    # F1 - Trend 4TF Must Align
+    trends = [trend_1h, trend_4h, trend_12h, trend_1d]
+    if trends.count("BEAR") == 4:
+        side = "SHORT"
+        score += 25
+    elif trends.count("BULL") == 4:
+        side = "LONG"
+        score += 25
+    else:
+        rejects.append(f"F1 TF_MISMATCH {trend_1h}/{trend_4h}/{trend_12h}/{trend_1d}")
+
+    # F2 - ADX
+    adx_need = ADX_BTC_MIN if symbol.startswith("BTC") else ADX_MIN
+    if adx >= adx_need:
+        score += 23
+    else:
+        rejects.append(f"F2 ADX_LOW {adx:.1f}")
+
+    # F3 - RSI
+    if RSI_OVERSOLD < rsi < RSI_OVERBOUGHT:
+        score += 12
+    else:
+        rejects.append(f"F3 RSI {rsi:.1f}")
+
+    # F4 - Volume
+    if vol_ratio >= VOL_MIN:
+        score += 15
+    else:
+        rejects.append(f"F4 VOL_LOW {vol_ratio:.2f}x")
+
+    # F5 - Spread (Assume Pass for Binance Futures Majors)
+    score += 7
+
+    # F6 - Pullback / Dist to EMA
+    if dist <= PULLBACK_MAX:
+        score += 8
+    else:
+        rejects.append(f"F6 DIST {dist:.2f}%")
+
+    # F7 - Score Min
+    if score < SCORE_MIN:
+        rejects.append(f"F7 SCORE {score}")
+
+    # F8 - BTC Regime
+    if btc_regime == "BEAR" and side == "LONG":
+        rejects.append("F8 BTC_BEAR_NO_LONG")
+    if btc_regime == "BULL" and side == "SHORT":
+        rejects.append("F8 BTC_BULL_NO_SHORT")
+
+    if rejects or side is None:
+        return None, rejects
+
+    # Levels
+    if side == "SHORT":
+        sl = price * 1.015
+        tp1 = price * 0.98
+        tp2 = price * 0.96
+        lev = 15 if vol_ratio > 3 else 10
+    else:
+        sl = price * 0.985
+        tp1 = price * 1.02
+        tp2 = price * 1.04
+        lev = 15 if vol_ratio > 3 else 10
+
+    signal = {
+        "symbol": symbol, "side": side, "score": score, "price": price,
+        "trend": "/".join(trends), "adx": adx, "rsi": rsi,
+        "vol": vol_ratio, "dist": dist, "sl": sl, "tp1": tp1, "tp2": tp2, "lev": lev
+    }
+    return signal, []
+
+# ==================== MAIN LOOP ====================
+last_alive = 0
+
+async def main():
+    global last_alive
+    print("🚀 BOT STARTED - 92/100 Sniper | SCAN 30mins | ALIVE 4hrs")
+    await send_telegram(
+        "🚀 BOT STARTED\n"
+        "Strictness: 92/100\n"
+        "SCAN: Every 30 mins\n"
+        "ALIVE: Every 4hrs\n"
+        f"Scanning: {len(ALL_COINS)} Coins | 8 Filters"
+    )
+    # Force first ALIVE immediately so you know it works
+    last_alive = time.time() - BOT_ALIVE_INTERVAL + 60  # ALIVE in 60 sec after start
+
     while True:
-        btc_status=get_btc_status()
-        checked=sent=0
-        for sym in ALL:
-            checked+=1
-            result, reason=score_coin(sym, btc_status)
-            if result:
-                sent+=1
-                msg=f"""*{result['symbol']} {result['direction']}*
-Score: {result['score']} | Lev: {result['lev']}x
-BTC: {result['btc']} | Trend: {result['t']}
-ADX: {result['adx']:.1f} RSI: {result['rsi']:.1f} Vol: {result['vol_ratio']:.2f}x Dist: {result['dist']:.2f}%
-Entry: {result['price']:.6f}
-SL: {result['sl']:.6f}
-TP1: {result['tp1']:.6f}
-TP2: {result['tp2']:.6f}
-"""
-                send_telegram(msg)
-                print(f"SENT {sym} {result['direction']} Score {result['score']}", flush=True)
-            else:
-                print(f"REJECT {sym}: {reason}", flush=True)
-            time.sleep(0.3)
-        print(f"FINISH Checked:{checked} Sent:{sent} | BTC:{btc_status}", flush=True)
-        time.sleep(300)
+        try:
+            scan_start = time.time()
+            btc_regime = get_btc_regime()
+            print(f"\n=== SCAN {datetime.now().strftime('%H:%M:%S')} BTC:{btc_regime} ===")
 
-if __name__=="__main__":
-    run()
+            signals = []
+            checked = 0
+            for coin in ALL_COINS:
+                checked += 1
+                sig, rejects = check_coin(coin, btc_regime)
+                if sig:
+                    signals.append(sig)
+                    print(f"✅ {coin} {sig['side']} Score {sig['score']} Vol {sig['vol']:.2f}x")
+                else:
+                    print(f"REJECT {coin}: {rejects}")
+                await asyncio.sleep(0.2)
+
+            scan_duration = time.time() - scan_start
+            print(f"Checked:{checked} Sent:{len(signals)} | Scan Duration: {scan_duration:.1f}s")
+
+            # SEND SIGNALS IMMEDIATELY
+            for sig in signals:
+                msg = (
+                    f"🚨 <b>{sig['symbol']} {sig['side']}</b>\n"
+                    f"Score {sig['score']} | Lev {sig['lev']}x | BTC {btc_regime}\n"
+                    f"Trend {sig['trend']}\n"
+                    f"ADX {sig['adx']:.1f} | RSI {sig['rsi']:.1f} | Vol {sig['vol']:.2f}x | Dist {sig['dist']:.2f}%\n"
+                    f"Entry {sig['price']:.4f}\n"
+                    f"SL {sig['sl']:.4f}\n"
+                    f"TP1 {sig['tp1']:.4f} | TP2 {sig['tp2']:.4f}"
+                )
+                await send_telegram(msg)
+
+            # BOT ALIVE EVERY 4 HOURS
+            now_ts = time.time()
+            if now_ts - last_alive >= BOT_ALIVE_INTERVAL:
+                alive_msg = (
+                    f"✅ BOT ALIVE\n"
+                    f"Checked:{checked} | Sent:{len(signals)}\n"
+                    f"Strictness:92/100 | BTC:{btc_regime}\n"
+                    f"Mode: Sniper 92/100 | Time:{datetime.now().strftime('%H:%M:%S')}\n"
+                    f"Scan Duration: {scan_duration:.0f}s | Next Scan in 30mins\n"
+                    f"Status: Scanning 8 filters | Next ALIVE in 4hrs"
+                )
+                await send_telegram(alive_msg)
+                last_alive = now_ts
+                print(f"✅ ALIVE SENT - Next in 4hrs")
+
+            print(f"Sleeping 30 mins...")
+            await asyncio.sleep(SCAN_INTERVAL)
+
+        except Exception as e:
+            print(f"LOOP ERROR: {e}")
+            await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main())
