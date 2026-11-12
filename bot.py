@@ -1,313 +1,155 @@
-import asyncio
-import time
+import os
 import requests
+import time
 from datetime import datetime
 
-# ==================== CONFIG - EDIT THIS ====================
-TELEGRAM_BOT_TOKEN = "8914668267:AAHi0OiTHYJjULC4FIfMSGf1GQ_6wg2cjt8"
-TELEGRAM_CHAT_ID = "-1004458770787"
+# --- CONFIG ---
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_BROADCAST_ID")
+BROADCAST_ID = os.getenv("TELEGRAM_BROADCAST_ID") or CHAT_ID
 
-BOT_ALIVE_INTERVAL = 4 * 3600  # 4 HOURS - ALIVE
-SCAN_INTERVAL = 30 * 60       # 30 MINS - SCAN EVERY 30 MINS
+TOTAL_COINS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
+    "TRXUSDT", "DOTUSDT", "BCHUSDT", "NEARUSDT", "UNIUSDT",
+    "ETCUSDT", "XLMUSDT", "HBARUSDT", "APTUSDT", "ARBUSDT",
+    "FILUSDT", "OPUSDT", "INJUSDT", "STXUSDT", "TIAUSDT",
+    "SUIUSDT", "PEPEUSDT", "RENDRUSDT", "RNDRUSDT", "SEIUSDT",
+    "WIFUSDT", "BONKUSDT", "SHIBUSDT", "FLOKIUSDT", "AAVEUSDT",
+    "MKRUSDT", "ATOMUSDT", "GRTUSDT", "RUNEUSDT", "FTMUSDT",
+    "ALGOUSDT", "VETUSDT", "QNTUSDT", "ENAUSDT"
+]
+
 STRICTNESS = 92
-SCORE_MIN = 80
+SCAN_INTERVAL = "30m"
 
-ADX_MIN = 20
-ADX_BTC_MIN = 25
-RSI_OVERBOUGHT = 78
-RSI_OVERSOLD = 28
-VOL_MIN = 1.2
-PULLBACK_MAX = 0.8
-
-# ==================== COIN LISTS - 44 COINS ====================
-MAJOR = [
-    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT",
-    "ADAUSDT","AVAXUSDT","LINKUSDT","TRXUSDT","DOTUSDT","MATICUSDT",
-    "LTCUSDT","BCHUSDT","XAUTUSDT","GOLDUSDT","PAXGUSDT"
-]
-
-QUANT_MEME = [
-    "PEPEUSDT","SHIBUSDT","WIFUSDT","BONKUSDT","FLOKIUSDT",
-    "STXUSDT","SUIUSDT","APTUSDT","ARBUSDT","OPUSDT",
-    "INJUSDT","SEIUSDT","TIAUSDT","NEARUSDT","TONUSDT"
-]
-
-MANUAL_NEW = [
-    "KAIAUSDT","EIGENUSDT","ZROUSDT","LISTAUSDT","ZKUSDT",
-    "IOUSDT","REZUSDT","BBUSDT","NOTUSDT"
-]
-
-# Auto New - Add Binance new listings here manually, up to 20
-AUTO_NEW = [
-    "HYPEUSDT","VIRTUALUSDT","AIXBTUSDT"
-]
-
-ALL_COINS = MAJOR + QUANT_MEME + MANUAL_NEW + AUTO_NEW
-print(f"Total Coins: {len(ALL_COINS)}")
-
-# ==================== TELEGRAM ====================
-def send_telegram_sync(text):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-        r = requests.post(url, json=payload, timeout=10)
-        print(f"TG {r.status_code} | {text[:60]}")
-        return r.status_code == 200
-    except Exception as e:
-        print(f"TG FAILED: {e}")
-        return False
-
-async def send_telegram(text):
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, send_telegram_sync, text)
-
-# ==================== BINANCE DATA ====================
-def get_klines(symbol, interval, limit=100):
-    try:
-        url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        if not isinstance(data, list):
-            return [], []
-        closes = [float(x[4]) for x in data]
-        volumes = [float(x[5]) for x in data]
-        return closes, volumes
-    except Exception as e:
-        print(f"Klines fail {symbol} {interval}: {e}")
-        return [], []
-
-def calc_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        diff = closes[i] - closes[i-1]
-        gains.append(max(diff, 0))
-        losses.append(max(-diff, 0))
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calc_adx(closes, period=14):
-    if len(closes) < period + 2:
-        return 0
-    trs, dms = [], []
-    for i in range(1, len(closes)):
-        tr = abs(closes[i] - closes[i-1])
-        trs.append(tr)
-        dms.append(abs(closes[i] - closes[i-1]) if closes[i] > closes[i-1] else 0)
-    if sum(trs[-period:]) == 0:
-        return 0
-    adx = (sum(dms[-period:]) / sum(trs[-period:])) * 100
-    return min(adx * 1.8, 60)
-
-def calc_ema(closes, period):
-    if not closes:
-        return 0
-    if len(closes) < period:
-        return closes[-1]
-    k = 2 / (period + 1)
-    ema = closes[0]
-    for c in closes[1:]:
-        ema = c * k + ema * (1 - k)
-    return ema
-
-def get_trend(closes):
-    if len(closes) < 50:
-        return "NEUTRAL"
-    ema7 = calc_ema(closes, 7)
-    ema28 = calc_ema(closes, 28)
-    price = closes[-1]
-    if price > ema7 > ema28:
-        return "BULL"
-    if price < ema7 < ema28:
-        return "BEAR"
-    return "NEUTRAL"
-
-def get_btc_regime():
-    closes, _ = get_klines("BTCUSDT", "4h", 100)
-    if not closes:
-        return "BEAR"
-    return get_trend(closes)
-
-# ==================== 8 FILTERS - 92/100 LOGIC ====================
-def check_coin(symbol, btc_regime):
-    closes_1h, vol_1h = get_klines(symbol, "1h", 100)
-    closes_4h, vol_4h = get_klines(symbol, "4h", 100)
-    closes_12h, _ = get_klines(symbol, "12h", 100)
-    closes_1d, _ = get_klines(symbol, "1d", 100)
-
-    if not closes_1h or not closes_4h:
-        return None, ["NO_DATA"]
-
-    price = closes_1h[-1]
-    trend_1h = get_trend(closes_1h)
-    trend_4h = get_trend(closes_4h)
-    trend_12h = get_trend(closes_12h)
-    trend_1d = get_trend(closes_1d)
-    rsi = calc_rsi(closes_1h)
-    adx = calc_adx(closes_4h)
-
-    # Volume Ratio
-    if len(vol_1h) > 20:
-        avg_vol = sum(vol_1h[-20:-1]) / 19
-        vol_ratio = vol_1h[-1] / avg_vol if avg_vol > 0 else 0
-    else:
-        vol_ratio = 0
-
-    ema7 = calc_ema(closes_1h, 7)
-    dist = abs(price - ema7) / ema7 * 100 if ema7 else 99
-
-    rejects = []
-    score = 0
-    side = None
-
-    # F1 - Trend 4TF Must Align
-    trends = [trend_1h, trend_4h, trend_12h, trend_1d]
-    if trends.count("BEAR") == 4:
-        side = "SHORT"
-        score += 25
-    elif trends.count("BULL") == 4:
-        side = "LONG"
-        score += 25
-    else:
-        rejects.append(f"F1 TF_MISMATCH {trend_1h}/{trend_4h}/{trend_12h}/{trend_1d}")
-
-    # F2 - ADX
-    adx_need = ADX_BTC_MIN if symbol.startswith("BTC") else ADX_MIN
-    if adx >= adx_need:
-        score += 23
-    else:
-        rejects.append(f"F2 ADX_LOW {adx:.1f}")
-
-    # F3 - RSI
-    if RSI_OVERSOLD < rsi < RSI_OVERBOUGHT:
-        score += 12
-    else:
-        rejects.append(f"F3 RSI {rsi:.1f}")
-
-    # F4 - Volume
-    if vol_ratio >= VOL_MIN:
-        score += 15
-    else:
-        rejects.append(f"F4 VOL_LOW {vol_ratio:.2f}x")
-
-    # F5 - Spread (Assume Pass for Binance Futures Majors)
-    score += 7
-
-    # F6 - Pullback / Dist to EMA
-    if dist <= PULLBACK_MAX:
-        score += 8
-    else:
-        rejects.append(f"F6 DIST {dist:.2f}%")
-
-    # F7 - Score Min
-    if score < SCORE_MIN:
-        rejects.append(f"F7 SCORE {score}")
-
-    # F8 - BTC Regime
-    if btc_regime == "BEAR" and side == "LONG":
-        rejects.append("F8 BTC_BEAR_NO_LONG")
-    if btc_regime == "BULL" and side == "SHORT":
-        rejects.append("F8 BTC_BULL_NO_SHORT")
-
-    if rejects or side is None:
-        return None, rejects
-
-    # Levels
-    if side == "SHORT":
-        sl = price * 1.015
-        tp1 = price * 0.98
-        tp2 = price * 0.96
-        lev = 15 if vol_ratio > 3 else 10
-    else:
-        sl = price * 0.985
-        tp1 = price * 1.02
-        tp2 = price * 1.04
-        lev = 15 if vol_ratio > 3 else 10
-
-    signal = {
-        "symbol": symbol, "side": side, "score": score, "price": price,
-        "trend": "/".join(trends), "adx": adx, "rsi": rsi,
-        "vol": vol_ratio, "dist": dist, "sl": sl, "tp1": tp1, "tp2": tp2, "lev": lev
-    }
-    return signal, []
-
-# ==================== MAIN LOOP ====================
-last_alive = 0
-
-async def main():
-    global last_alive
-    print("🚀 BOT STARTED - 92/100 Sniper | SCAN 30mins | ALIVE 4hrs")
-    await send_telegram(
-        "🚀 BOT STARTED\n"
-        "Strictness: 92/100\n"
-        "SCAN: Every 30 mins\n"
-        "ALIVE: Every 4hrs\n"
-        f"Scanning: {len(ALL_COINS)} Coins | 8 Filters"
-    )
-    # Force first ALIVE immediately so you know it works
-    last_alive = time.time() - BOT_ALIVE_INTERVAL + 60  # ALIVE in 60 sec after start
-
-    while True:
+def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Missing BOT_TOKEN or CHAT_ID")
+        return
+    for cid in set([CHAT_ID, BROADCAST_ID]):
+        if not cid:
+            continue
         try:
-            scan_start = time.time()
-            btc_regime = get_btc_regime()
-            print(f"\n=== SCAN {datetime.now().strftime('%H:%M:%S')} BTC:{btc_regime} ===")
-
-            signals = []
-            checked = 0
-            for coin in ALL_COINS:
-                checked += 1
-                sig, rejects = check_coin(coin, btc_regime)
-                if sig:
-                    signals.append(sig)
-                    print(f"✅ {coin} {sig['side']} Score {sig['score']} Vol {sig['vol']:.2f}x")
-                else:
-                    print(f"REJECT {coin}: {rejects}")
-                await asyncio.sleep(0.2)
-
-            scan_duration = time.time() - scan_start
-            print(f"Checked:{checked} Sent:{len(signals)} | Scan Duration: {scan_duration:.1f}s")
-
-            # SEND SIGNALS IMMEDIATELY
-            for sig in signals:
-                msg = (
-                    f"🚨 <b>{sig['symbol']} {sig['side']}</b>\n"
-                    f"Score {sig['score']} | Lev {sig['lev']}x | BTC {btc_regime}\n"
-                    f"Trend {sig['trend']}\n"
-                    f"ADX {sig['adx']:.1f} | RSI {sig['rsi']:.1f} | Vol {sig['vol']:.2f}x | Dist {sig['dist']:.2f}%\n"
-                    f"Entry {sig['price']:.4f}\n"
-                    f"SL {sig['sl']:.4f}\n"
-                    f"TP1 {sig['tp1']:.4f} | TP2 {sig['tp2']:.4f}"
-                )
-                await send_telegram(msg)
-
-            # BOT ALIVE EVERY 4 HOURS
-            now_ts = time.time()
-            if now_ts - last_alive >= BOT_ALIVE_INTERVAL:
-                alive_msg = (
-                    f"✅ BOT ALIVE\n"
-                    f"Checked:{checked} | Sent:{len(signals)}\n"
-                    f"Strictness:92/100 | BTC:{btc_regime}\n"
-                    f"Mode: Sniper 92/100 | Time:{datetime.now().strftime('%H:%M:%S')}\n"
-                    f"Scan Duration: {scan_duration:.0f}s | Next Scan in 30mins\n"
-                    f"Status: Scanning 8 filters | Next ALIVE in 4hrs"
-                )
-                await send_telegram(alive_msg)
-                last_alive = now_ts
-                print(f"✅ ALIVE SENT - Next in 4hrs")
-
-            print(f"Sleeping 30 mins...")
-            await asyncio.sleep(SCAN_INTERVAL)
-
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            r = requests.post(url, json={"chat_id": cid, "text": text, "parse_mode": "Markdown"}, timeout=10)
+            if r.status_code == 200:
+                print(f"TG 200 | {text[:30]}")
+            else:
+                print(f"TG {r.status_code} | {r.text[:100]}")
         except Exception as e:
-            print(f"LOOP ERROR: {e}")
-            await asyncio.sleep(60)
+            print(f"TG ERROR: {e}")
+
+def get_klines_okx(symbol="BTCUSDT", interval="15m", limit=100):
+    try:
+        okx_symbol = symbol.replace("USDT", "-USDT") if "-USDT" not in symbol else symbol
+        interval_map = {"1m":"1m","3m":"3m","5m":"5m","15m":"15m","30m":"30m","1h":"1H","1H":"1H","4h":"4H","4H":"4H","1d":"1D","1D":"1D"}
+        okx_interval = interval_map.get(interval, "15m")
+        url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit={limit}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=15)
+        j = r.json()
+        data = j.get("data", [])
+        if not data:
+            return []
+        klines = []
+        for c in reversed(data):
+            klines.append({
+                "time": int(c[0]),
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4]),
+                "vol": float(c[5]),
+            })
+        return klines
+    except Exception as e:
+        print(f"DATA ERROR {symbol}: {e}")
+        return []
+
+def calc_score(klines):
+    if len(klines) < 50:
+        return None, ["NO_DATA"]
+    closes = [k["close"] for k in klines]
+    highs = [k["high"] for k in klines]
+    lows = [k["low"] for k in klines]
+    vols = [k["vol"] for k in klines]
+
+    # Simple sniper score: RSI + Volume spike + Trend
+    # Last price vs SMA50
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+    curr = closes[-1]
+    
+    score = 50
+    reasons = []
+
+    # Trend
+    if curr > sma20 > sma50:
+        score += 20
+        trend = "BULL"
+    elif curr < sma20 < sma50:
+        score -= 10
+        trend = "BEAR"
+    else:
+        trend = "SIDE"
+    
+    # Volume spike
+    avg_vol = sum(vols[-20:-1]) / 19
+    if vols[-1] > avg_vol * 1.5:
+        score += 15
+    
+    # Momentum
+    change = (curr - closes[-5]) / closes[-5] * 100
+    if change > 1.5:
+        score += 10
+    if change < -1.5:
+        score -= 5
+
+    # Avoid if score low
+    if score < STRICTNESS:
+        reasons.append(f"{score}/100 - {trend}")
+    
+    return score, trend, reasons
+
+def main():
+    print(f"Total Coins: {len(TOTAL_COINS)}")
+    start_msg = f"🚀 BOT STARTED - {STRICTNESS}/100 Sniper | SCAN {SCAN_INTERVAL} | {len(TOTAL_COINS)} coins"
+    print(start_msg)
+    send_telegram(start_msg)
+    
+    print(f"Strictness: {STRICTNESS}/100")
+    print(f"SCAN: Every 30 mins")
+    print(f"ALIVE:")
+    
+    # BTC market filter
+    btc_klines = get_klines_okx("BTCUSDT", "1H", 100)
+    if not btc_klines:
+        btc_trend = "UNKNOWN"
+    else:
+        btc_score, btc_t, _ = calc_score(btc_klines)
+        btc_trend = btc_t
+    print(f"=== SCAN {datetime.now().strftime('%H:%M:%S')} BTC:{btc_trend} ===")
+
+    found = 0
+    for symbol in TOTAL_COINS:
+        klines = get_klines_okx(symbol, "15m", 100)
+        result = calc_score(klines)
+        if result[0] is None:
+            print(f"REJECT {symbol}: ['NO_DATA']")
+            continue
+        
+        score, trend, reasons = result
+        if score >= STRICTNESS:
+            found += 1
+            msg = f"🔥 *{symbol}* - {score}/100 SNIPER\nTrend: {trend}\nEntry: {klines[-1]['close']}\nSL: {klines[-1]['low']}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+            print(f"FOUND {symbol}: {score}/100 {trend}")
+            send_telegram(msg)
+        else:
+            print(f"REJECT {symbol}: {reasons}")
+
+    if found == 0:
+        print(f"SCAN DONE - 0 signals (92/100 is strict, normal)")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
