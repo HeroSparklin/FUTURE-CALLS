@@ -1,5 +1,7 @@
+# === FULL 8-FILTER VERSION - 61 COINS (17 MAJOR + 15 QUANT + 9 MANUAL NEW + 20 AUTO NEW) ===
 import ccxt, time, requests, os
-print("STARTING BOT...", flush=True)
+print("STARTING BOT... FULL 8 FILTERS INTACT", flush=True)
+
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID") or os.getenv("TELEGRAM_BROADCAST_ID") or TELEGRAM_CHAT_ID
@@ -10,27 +12,25 @@ QUANT = ["ATOM/USDT","DOT/USDT","MATIC/USDT","LTC/USDT","ETC/USDT","XRP/USDT","A
 NEW_MANUAL = ["PUMP/USDT","HUMA/USDT","WCT/USDT","KERNEL/USDT","INIT/USDT","SIGN/USDT","PARTI/USDT","SOON/USDT","SXT/USDT"]
 
 def fetch_auto_new():
+    blacklist_sub = ["USDC","FDUSD","USDE","DAI","XAUT","PAXG","GOLD","WBTC","WETH","BNB"]
     print("Fetching auto new listings...", flush=True)
-    blacklist_sub = ["USDC","FDUSD","USDE","DAI","XAUT","PAXG","GOLD","WBTC","BNB","BTC","ETH"]
     try:
         tickers = exchange.fetch_tickers()
-        candidates = []
-        existing = set(MAJOR_ALT+QUANT+NEW_MANUAL)
+        candidates = []; existing = set(MAJOR_ALT+QUANT+NEW_MANUAL)
         for sym, t in tickers.items():
             if not sym.endswith("/USDT"): continue
             if sym in existing: continue
             if any(b in sym for b in blacklist_sub): continue
-            if any(x in sym for x in ["3L","3S","5L","5S"]): continue
+            if any(x in sym for x in ["3L","3S","5L","5S","BEAR","BULL","UP/","DOWN/"]): continue
             qv = t.get('quoteVolume') or 0
             if qv < 3000000 or qv > 60000000: continue
-            candidates.append((sym, qv))
+            candidates.append((sym,qv))
         candidates.sort(key=lambda x: x[1], reverse=True)
         res = [s for s,_ in candidates[:20]]
         print(f"AUTO NEW FOUND: {res}", flush=True)
         return res
     except Exception as e:
-        print(f"Auto fail {e}", flush=True)
-        return []
+        print(f"Auto fail {e}", flush=True); return []
 
 def get_ohlcv(s,tf,l=100):
     try: return exchange.fetch_ohlcv(s,tf,limit=l)
@@ -68,7 +68,7 @@ def get_trend(o):
     if c[-1]>e20>e50: return "BULL"
     if c[-1]<e20<e50: return "BEAR"
     return "NEUTRAL"
-def get_btc_status():
+def get_btc_status(): 
     return get_trend(get_ohlcv("BTC/USDT","4h",50))
 def send_telegram(msg):
     try:
@@ -80,24 +80,36 @@ def score_coin(sym, btc_status):
     o5=get_ohlcv(sym,"5m",100); o15=get_ohlcv(sym,"15m",100); o30=get_ohlcv(sym,"30m",100); o4h=get_ohlcv(sym,"4h",100)
     if not all([o5,o15,o30,o4h]): return None, "NO_DATA"
     closes=[x[4] for x in o5]; vols=[x[5] for x in o5]; price=closes[-1]
+    # F1: TREND ALIGN 5m=15m=30m=4h
     t5=get_trend(o5); t15=get_trend(o15); t30=get_trend(o30); t4h=get_trend(o4h)
-    if not (t5==t15==t30==t4h): return None, f"TF_MISMATCH {t5}/{t15}/{t30}/{t4h}"
+    if not (t5==t15==t30==t4h): return None, f"[F1 TF_MISMATCH] {t5}/{t15}/{t30}/{t4h}"
     direction=t5
+    # F2 + F8: ADX + BTC BEAR RULE
     adx_needed=25 if (btc_status=="BEAR" and direction=="BULL") else 20
     adx=calc_adx(o5,14)
-    if adx<adx_needed: return None, f"ADX_LOW {adx:.1f}<{adx_needed}"
+    if adx<adx_needed: return None, f"[F2 ADX_LOW] {adx:.1f}<{adx_needed} BTC={btc_status}"
+    # F3: RSI
     rsi=calc_rsi(closes,14)
-    if direction=="BULL" and rsi>78: return None, f"RSI_HIGH {rsi:.1f}"
-    if direction=="BEAR" and rsi<28: return None, f"RSI_LOW {rsi:.1f}"
+    if direction=="BULL" and rsi>78: return None, f"[F3 RSI_HIGH] {rsi:.1f}"
+    if direction=="BEAR" and rsi<28: return None, f"[F3 RSI_LOW] {rsi:.1f}"
+    # F4: VOLUME SPIKE >1.2x
     avg_vol=sum(vols[-21:-1])/20 if len(vols)>21 else 1
     vol_ratio=vols[-1]/avg_vol if avg_vol>0 else 0
-    if vol_ratio<1.2: return None, f"VOL_LOW {vol_ratio:.2f}"
+    if vol_ratio<1.2: return None, f"[F4 VOL_LOW] {vol_ratio:.2f}x"
+    # F5: SPREAD <0.5%
+    try:
+        ticker=exchange.fetch_ticker(sym)
+        spread=(ticker['ask']-ticker['bid'])/ticker['last']*100 if ticker['last'] else 0
+        if spread>0.5: return None, f"[F5 SPREAD_HIGH] {spread:.2f}%"
+    except: pass
+    # F6: PULLBACK DISTANCE <0.8%
     e20=calc_ema(closes,20)
     if not e20: return None, "NO_EMA"
     dist=abs(price-e20)/e20*100
-    if dist>0.8: return None, f"PULLBACK_FAR {dist:.2f}%"
+    if dist>0.8: return None, f"[F6 PULLBACK_FAR] {dist:.2f}%"
+    # F7: SCORE >=80
     score=0; score+=min(adx*2,50); score+=20 if vol_ratio>=1.5 else 10; score+=20 if dist<=0.4 else 10; score+=10 if (50<=rsi<=68 if direction=="BULL" else 35<=rsi<=65) else 0
-    if score<80: return None, f"SCORE_LOW {score}"
+    if score<80: return None, f"[F7 SCORE_LOW] {score}"
     atr=(max(closes[-14:])-min(closes[-14:]))/price*100 if closes else 1
     sl_pct=max(atr*1.2,1.5); tp1_pct=max(atr*1.5,2.0); tp2_pct=max(atr*3,4.0)
     if direction=="BULL": sl=price*(1-sl_pct/100); tp1=price*(1+tp1_pct/100); tp2=price*(1+tp2_pct/100)
@@ -108,7 +120,7 @@ def score_coin(sym, btc_status):
 def run():
     AUTO_NEW=fetch_auto_new()
     ALL=MAJOR_ALT+QUANT+NEW_MANUAL+AUTO_NEW
-    print(f"MANUAL NEW: {len(NEW_MANUAL)} | AUTO NEW: {len(AUTO_NEW)} | TOTAL: {len(ALL)}", flush=True)
+    print(f"MANUAL NEW: {len(NEW_MANUAL)} | AUTO NEW: {len(AUTO_NEW)} | TOTAL: {len(ALL)} | 8 FILTERS ACTIVE", flush=True)
     while True:
         btc_status=get_btc_status()
         checked=sent=0
@@ -129,9 +141,9 @@ TP2: {result['tp2']:.6f}
                 send_telegram(msg)
                 print(f"SENT {sym} {result['direction']} Score {result['score']}", flush=True)
             else:
-                if sym=="BTC/USDT": print(f"BTC REJECT: {reason}", flush=True)
+                print(f"REJECT {sym}: {reason}", flush=True)
             time.sleep(0.3)
-        print(f"FINISH Checked:{checked} Sent:{sent} | BTC:{btc_status} | AUTO NEW:{AUTO_NEW}", flush=True)
+        print(f"FINISH Checked:{checked} Sent:{sent} | BTC:{btc_status}", flush=True)
         time.sleep(300)
 
 if __name__=="__main__":
