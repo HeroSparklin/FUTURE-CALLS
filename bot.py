@@ -1,9 +1,9 @@
 import os
 import requests
-import time
 from datetime import datetime
 
-# --- CONFIG ---
+# --- CONFIG FROM GITHUB SECRETS ---
+# DO NOT type token/chat id here, it reads from Secrets
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_BROADCAST_ID")
 BROADCAST_ID = os.getenv("TELEGRAM_BROADCAST_ID") or CHAT_ID
@@ -14,18 +14,18 @@ TOTAL_COINS = [
     "TRXUSDT", "DOTUSDT", "BCHUSDT", "NEARUSDT", "UNIUSDT",
     "ETCUSDT", "XLMUSDT", "HBARUSDT", "APTUSDT", "ARBUSDT",
     "FILUSDT", "OPUSDT", "INJUSDT", "STXUSDT", "TIAUSDT",
-    "SUIUSDT", "PEPEUSDT", "RENDRUSDT", "RNDRUSDT", "SEIUSDT",
-    "WIFUSDT", "BONKUSDT", "SHIBUSDT", "FLOKIUSDT", "AAVEUSDT",
-    "MKRUSDT", "ATOMUSDT", "GRTUSDT", "RUNEUSDT", "FTMUSDT",
-    "ALGOUSDT", "VETUSDT", "QNTUSDT", "ENAUSDT"
+    "SUIUSDT", "PEPEUSDT", "RENDRUSDT", "SEIUSDT", "WIFUSDT",
+    "BONKUSDT", "SHIBUSDT", "FLOKIUSDT", "AAVEUSDT", "MKRUSDT",
+    "ATOMUSDT", "GRTUSDT", "RUNEUSDT", "FTMUSDT", "ALGOUSDT",
+    "VETUSDT", "QNTUSDT", "ENAUSDT", "TAOUSDT"
 ]
 
 STRICTNESS = 92
-SCAN_INTERVAL = "30m"
+SCAN_INTERVAL = "15m"
 
 def send_telegram(text):
     if not BOT_TOKEN or not CHAT_ID:
-        print("Missing BOT_TOKEN or CHAT_ID")
+        print("Missing BOT_TOKEN or CHAT_ID - check Secrets")
         return
     for cid in set([CHAT_ID, BROADCAST_ID]):
         if not cid:
@@ -34,9 +34,9 @@ def send_telegram(text):
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
             r = requests.post(url, json={"chat_id": cid, "text": text, "parse_mode": "Markdown"}, timeout=10)
             if r.status_code == 200:
-                print(f"TG 200 | {text[:30]}")
+                print(f"TG 200 | {text[:40]}")
             else:
-                print(f"TG {r.status_code} | {r.text[:100]}")
+                print(f"TG {r.status_code} | {r.text[:120]}")
         except Exception as e:
             print(f"TG ERROR: {e}")
 
@@ -69,22 +69,14 @@ def get_klines_okx(symbol="BTCUSDT", interval="15m", limit=100):
 
 def calc_score(klines):
     if len(klines) < 50:
-        return None, ["NO_DATA"]
+        return None, None, ["NO_DATA"]
     closes = [k["close"] for k in klines]
-    highs = [k["high"] for k in klines]
-    lows = [k["low"] for k in klines]
     vols = [k["vol"] for k in klines]
-
-    # Simple sniper score: RSI + Volume spike + Trend
-    # Last price vs SMA50
     sma20 = sum(closes[-20:]) / 20
     sma50 = sum(closes[-50:]) / 50
     curr = closes[-1]
-    
-    score = 50
-    reasons = []
 
-    # Trend
+    score = 50
     if curr > sma20 > sma50:
         score += 20
         trend = "BULL"
@@ -93,23 +85,25 @@ def calc_score(klines):
         trend = "BEAR"
     else:
         trend = "SIDE"
-    
-    # Volume spike
-    avg_vol = sum(vols[-20:-1]) / 19
+
+    avg_vol = sum(vols[-20:-1]) / 19 if len(vols) > 20 else 1
     if vols[-1] > avg_vol * 1.5:
         score += 15
-    
-    # Momentum
-    change = (curr - closes[-5]) / closes[-5] * 100
+
+    change = (curr - closes[-5]) / closes[-5] * 100 if closes[-5] != 0 else 0
     if change > 1.5:
         score += 10
     if change < -1.5:
         score -= 5
 
-    # Avoid if score low
-    if score < STRICTNESS:
-        reasons.append(f"{score}/100 - {trend}")
-    
+    # Bonus for strong breakout
+    if curr > max([k["high"] for k in klines[-20:-1]]):
+        score += 10
+
+    if score > 100:
+        score = 100
+
+    reasons = [f"{score}/100 - {trend}"]
     return score, trend, reasons
 
 def main():
@@ -117,32 +111,33 @@ def main():
     start_msg = f"🚀 BOT STARTED - {STRICTNESS}/100 Sniper | SCAN {SCAN_INTERVAL} | {len(TOTAL_COINS)} coins"
     print(start_msg)
     send_telegram(start_msg)
-    
     print(f"Strictness: {STRICTNESS}/100")
-    print(f"SCAN: Every 30 mins")
+    print(f"SCAN: Every 15 mins")
     print(f"ALIVE:")
-    
-    # BTC market filter
+
     btc_klines = get_klines_okx("BTCUSDT", "1H", 100)
     if not btc_klines:
         btc_trend = "UNKNOWN"
     else:
-        btc_score, btc_t, _ = calc_score(btc_klines)
-        btc_trend = btc_t
+        _, btc_trend, _ = calc_score(btc_klines)
+        if btc_trend is None:
+            btc_trend = "UNKNOWN"
+
     print(f"=== SCAN {datetime.now().strftime('%H:%M:%S')} BTC:{btc_trend} ===")
 
     found = 0
     for symbol in TOTAL_COINS:
         klines = get_klines_okx(symbol, "15m", 100)
-        result = calc_score(klines)
-        if result[0] is None:
+        score, trend, reasons = calc_score(klines)
+        if score is None:
             print(f"REJECT {symbol}: ['NO_DATA']")
             continue
-        
-        score, trend, reasons = result
         if score >= STRICTNESS:
             found += 1
-            msg = f"🔥 *{symbol}* - {score}/100 SNIPER\nTrend: {trend}\nEntry: {klines[-1]['close']}\nSL: {klines[-1]['low']}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+            entry = klines[-1]['close']
+            sl = klines[-1]['low']
+            tp = entry + (entry - sl) * 2 if entry > sl else entry * 1.02
+            msg = f"🔥 *{symbol}* - {score}/100 SNIPER\nTrend: {trend}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nTime: {datetime.now().strftime('%H:%M:%S')}"
             print(f"FOUND {symbol}: {score}/100 {trend}")
             send_telegram(msg)
         else:
