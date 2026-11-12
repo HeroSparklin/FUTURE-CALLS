@@ -3,6 +3,7 @@
 # MEXC Exchange
 # ALIVE: EVERY 4 HOURS LOCKED - 00,04,08,12,16,20 UTC = 01,05,09,13,17,21 Lagos
 # LEVERAGE LOCKED: Score 95-100=15x, 90-94=10x, 80-89=5x - MAX 15x
+# FIX 12 Nov 2026: Alive only once per 4H window (minute < 15) - fixes Telegram Flood block
 
 import os, ccxt, time, requests, math
 from datetime import datetime, timezone
@@ -168,14 +169,18 @@ def send_tg(text):
     for cid in [CHAT_ID, CHANNEL_ID]:
         if not cid: continue
         try:
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id":cid,"text":text,"parse_mode":"HTML"}, timeout=10)
+            r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id":cid,"text":text,"parse_mode":"HTML"}, timeout=10)
+            print(f"TG to {cid}: {r.status_code} {r.text[:150]}")
+            if r.status_code == 429:
+                print("TELEGRAM FLOOD - WAITING, NOT RETRYING")
         except Exception as e: print(f"TG error {cid}: {e}")
 
 def main():
     now = datetime.now(timezone.utc)
     hour = now.hour
     print(f"Run start UTC {now} | 8 FILTERS LOCKED - ATR SL + Pullback + Alive 4H + Leverage MAX 15x")
-    if hour % 4 == 0:
+    # ALIVE FIX: ONLY ONCE per 4H window - first run only (minute < 15)
+    if hour % 4 == 0 and now.minute < 15:
         send_tg(f"🤖 Bot Alive - MEXC | {now.strftime('%H:%M UTC')} | LOCKED 8 FILTERS - Alive Every 4H")
         if hour == 0:
             print("Dead Hour 00 UTC - Alive sent, stopping scan")
