@@ -1,35 +1,41 @@
 import os
 import requests
 import json
+import csv
+import time
 from datetime import datetime, timedelta
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_BROADCAST_ID")
 BROADCAST_ID = os.getenv("TELEGRAM_BROADCAST_ID") or CHAT_ID
 
+# ===== 85/100 UPGRADE - TOP 25 VOLUME ONLY =====
 TOTAL_COINS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
-    "TRXUSDT", "DOTUSDT", "BCHUSDT", "NEARUSDT", "UNIUSDT",
-    "ETCUSDT", "XLMUSDT", "HBARUSDT", "APTUSDT", "ARBUSDT",
-    "FILUSDT", "OPUSDT", "INJUSDT", "STXUSDT", "TIAUSDT",
-    "SUIUSDT", "PEPEUSDT", "RENDRUSDT", "SEIUSDT", "WIFUSDT",
-    "BONKUSDT", "SHIBUSDT", "FLOKIUSDT", "AAVEUSDT", "MKRUSDT",
-    "ATOMUSDT", "GRTUSDT", "RUNEUSDT", "FTMUSDT", "ALGOUSDT",
-    "VETUSDT", "QNTUSDT", "ENAUSDT", "TAOUSDT"
+    "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT",
+    "NEARUSDT", "UNIUSDT", "APTUSDT", "ARBUSDT", "FILUSDT",
+    "OPUSDT", "INJUSDT", "STXUSDT", "TIAUSDT", "SUIUSDT",
+    "PEPEUSDT", "WIFUSDT", "BONKUSDT", "AAVEUSDT", "TAOUSDT"
 ]
 
-# ===== LOCKED CONFIG - 12 FILTERS - 24HRS =====
+# ===== LOCKED CONFIG - 12 FILTERS + 3 NEW FIXES =====
 STRICTNESS = 92
 SCAN_INTERVAL = "15m"
 MAX_SPREAD = 0.3
-MODE = "LONG + SHORT - 12 FILTERS - 24HRS"
-ENTRY_START_HOUR = 0   # <-- 24HRS UNLOCKED
-ENTRY_END_HOUR = 24    # <-- 24HRS UNLOCKED
+MODE = "LONG + SHORT - 12 FILTERS - 24HRS - 85/100"
+ENTRY_START_HOUR = 0
+ENTRY_END_HOUR = 24
 BTC_EXTREME_VOL = 4.0
 COOLDOWN_FILE = "cooldown.json"
 COOLDOWN_HOURS = 2
 HTF_INTERVAL = "1h"
+
+# --- NEW FIX 1: RISK MANAGEMENT ---
+MAX_RISK_PCT = 2.5  # If SL is more than 2.5% away, SKIP trade
+MAX_ATR_PCT = 6.0   # Reduced from 8% to 6% - safer
+
+# --- NEW FIX 3: LOGGING ---
+LOG_FILE = "signals_log.csv"
 # ==============================================
 
 def send_telegram(text):
@@ -45,6 +51,18 @@ def send_telegram(text):
             print(f"TG {r.status_code} | {text[:50]}")
         except Exception as e:
             print(f"TG ERROR: {e}")
+
+def log_signal(symbol, direction, score, entry, sl, tp, rsi, adx, spread, btc_trend, risk_pct):
+    try:
+        file_exists = os.path.exists(LOG_FILE)
+        with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["time", "symbol", "direction", "score", "entry", "sl", "tp", "rsi", "adx", "spread", "btc_trend", "risk_pct", "result"])
+            writer.writerow([datetime.utcnow().isoformat(), symbol, direction, score, entry, sl, tp, rsi, adx, spread, btc_trend, risk_pct, ""])
+        print(f"LOGGED to {LOG_FILE}")
+    except Exception as e:
+        print(f"LOG ERROR: {e}")
 
 def get_klines_okx(symbol="BTCUSDT", interval="15m", limit=100):
     try:
@@ -164,7 +182,6 @@ def calc_adx(klines, period=14):
 def is_entry_timing_ok():
     now_utc = datetime.utcnow()
     hour = now_utc.hour
-    # 0-24 = Always OK for 24hr trading
     return ENTRY_START_HOUR <= hour < ENTRY_END_HOUR, hour
 
 def load_cooldown():
@@ -213,12 +230,12 @@ def check_htf_confirmation(symbol, trend_15m):
         if htf_price > htf_sma50:
             return True, f"HTF_OK Price {htf_price:.4f} > 1H SMA50 {htf_sma50:.4f}"
         else:
-            return False, f"HTF_REJECT LONG but 1H Price {htf_price:.4f} < 1H SMA50 {htf_sma50:.4f} - Bounce in Downtrend"
+            return False, f"HTF_REJECT LONG but 1H Price {htf_price:.4f} < 1H SMA50 {htf_sma50:.4f}"
     else:
         if htf_price < htf_sma50:
             return True, f"HTF_OK Price {htf_price:.4f} < 1H SMA50 {htf_sma50:.4f}"
         else:
-            return False, f"HTF_REJECT SHORT but 1H Price {htf_price:.4f} > 1H SMA50 {htf_sma50:.4f} - Dip in Uptrend"
+            return False, f"HTF_REJECT SHORT but 1H Price {htf_price:.4f} > 1H SMA50 {htf_sma50:.4f}"
 
 def get_btc_dynamic():
     btc_klines = get_klines_okx("BTCUSDT", "1H", 100)
@@ -308,8 +325,8 @@ def calc_score(klines, btc_trend="UNKNOWN", btc_volatility=0, btc_regime="NORMAL
     atr_pct = (atr / curr * 100) if curr != 0 else 0
     if atr_pct < 0.3:
         return score, trend, [f"{score}/100 - {trend} ATR_TOO_LOW {atr_pct:.2f}%"], rsi, atr, adx
-    if atr_pct > 8.0:
-        return score, trend, [f"{score}/100 - {trend} ATR_TOO_HIGH {atr_pct:.2f}%"], rsi, atr, adx
+    if atr_pct > MAX_ATR_PCT:
+        return score, trend, [f"{score}/100 - {trend} ATR_TOO_HIGH {atr_pct:.2f}% > {MAX_ATR_PCT}%"], rsi, atr, adx
 
     if adx < adx_min:
         return score, trend, [f"{score}/100 - {trend} ADX_WEAK {adx:.1f} < {adx_min} ({dyn_mode})"], rsi, atr, adx
@@ -325,24 +342,27 @@ def calc_score(klines, btc_trend="UNKNOWN", btc_volatility=0, btc_regime="NORMAL
     return score, trend, reasons, rsi, atr, adx
 
 def main():
-    print(f"Total Coins: {len(TOTAL_COINS)} | {MODE} | Strictness: {STRICTNESS} | SPREAD Max {MAX_SPREAD}% | LOCKED - 24HRS")
+    print(f"Total Coins: {len(TOTAL_COINS)} | {MODE} | Strictness: {STRICTNESS} | MAX RISK {MAX_RISK_PCT}% | 85/100 UPGRADE")
     timing_ok, current_hour = is_entry_timing_ok()
     print(f"Timing Check: {current_hour}:00 UTC - {'24HRS ALLOWED' if timing_ok else 'BLOCKED'}")
 
     btc_trend, btc_volatility, btc_regime, rsi_long_min, rsi_short_max, adx_min, block_all, btc_msg = get_btc_dynamic()
-    print(f"=== BTC DYNAMIC: BTC:{btc_trend} VOL:{btc_volatility:.2f}% REGIME:{btc_regime} RSI_LONG>{rsi_long_min} RSI_SHORT<{rsi_short_max} ADX>{adx_min} BLOCK:{block_all} ===")
+    print(f"=== BTC DYNAMIC: BTC:{btc_trend} VOL:{btc_volatility:.2f}% REGIME:{btc_regime} BLOCK:{block_all} ===")
     if block_all:
         print(f"SCAN STOPPED - {btc_msg}")
         return
 
     cooldown_data = load_cooldown()
-    print(f"=== SCAN {datetime.now().strftime('%H:%M:%S')} UTC {current_hour}:00 BTC:{btc_trend} 24HRS:ON Cooldown: {len(cooldown_data)} coins ===")
+    print(f"=== SCAN {datetime.now().strftime('%H:%M:%S')} UTC {current_hour}:00 BTC:{btc_trend} 24HRS:ON ===")
 
     found = 0
     for symbol in TOTAL_COINS:
+        # --- FIX 2: ANTI RATE-LIMIT DELAY ---
+        time.sleep(1.2)
+
         spread = get_spread_pct(symbol)
         if spread > MAX_SPREAD:
-            print(f"REJECT {symbol}: SPREAD_HIGH {spread:.3f}% > 0.3%")
+            print(f"REJECT {symbol}: SPREAD_HIGH {spread:.3f}%")
             continue
         klines = get_klines_okx(symbol, "15m", 100)
         score, trend, reasons, rsi, atr, adx = calc_score(klines, btc_trend, btc_volatility, btc_regime, rsi_long_min, rsi_short_max, adx_min)
@@ -354,14 +374,12 @@ def main():
             if not htf_ok:
                 print(f"REJECT {symbol}: {score}/100 {trend} - {htf_msg}")
                 continue
-            print(f"HTF PASS {symbol}: {htf_msg}")
 
             on_cool, mins_left = is_on_cooldown(symbol, cooldown_data)
             if on_cool:
                 print(f"HOLD {symbol}: {score}/100 {trend} - COOLDOWN {mins_left}min left")
                 continue
 
-            found += 1
             entry = klines[-1]['close']
             if trend == "BULL":
                 direction = "LONG"
@@ -380,16 +398,30 @@ def main():
                     sl = entry * 1.02
                     tp = entry * 0.96
 
+            # --- FIX 1: RISK MANAGEMENT CHECK ---
+            risk_pct = abs(entry - sl) / entry * 100 if entry != 0 else 0
+            if risk_pct > MAX_RISK_PCT:
+                print(f"REJECT {symbol}: RISK_TOO_HIGH {risk_pct:.2f}% > {MAX_RISK_PCT}% - SL too far")
+                continue
+            if risk_pct < 0.4:
+                print(f"REJECT {symbol}: RISK_TOO_LOW {risk_pct:.2f}% - SL too tight")
+                continue
+
+            found += 1
             set_cooldown(symbol, cooldown_data)
 
-            msg = f"{emoji} *{symbol}* {direction} - {score}/100 SNIPER\nTrend: {trend} | HTF 1H: ✅\nEntry: {entry}\nSL: {sl:.6f} (ATR SL)\nTP: {tp:.6f} (2R)\nSpread: {spread:.3f}%\nADX: {adx:.1f}\nBTC: {btc_trend} {btc_regime} Vol {btc_volatility:.2f}%\n{reasons[0]}\nHTF: {htf_msg}\nTime: {datetime.now().strftime('%H:%M:%S')} UTC 24HRS"
-            print(f"FOUND {symbol}: {score}/100 {direction} | Spread {spread:.3f}% | ADX {adx:.1f} | {reasons[0]}")
+            msg = f"{emoji} *{symbol}* {direction} - {score}/100 SNIPER 85/100\nTrend: {trend} | HTF 1H: ✅\nEntry: {entry}\nSL: {sl:.6f} ({risk_pct:.2f}% risk)\nTP: {tp:.6f} (2R)\nSpread: {spread:.3f}%\nADX: {adx:.1f}\nBTC: {btc_trend} {btc_regime}\n{reasons[0]}\nHTF: {htf_msg}\nTime: {datetime.now().strftime('%H:%M:%S')} UTC"
+            print(f"FOUND {symbol}: {score}/100 {direction} | Risk {risk_pct:.2f}% | {reasons[0]}")
             send_telegram(msg)
+            
+            # --- FIX 3: LOG IT ---
+            log_signal(symbol, direction, score, entry, sl, tp, rsi, adx, spread, btc_trend, risk_pct)
+
         else:
             print(f"REJECT {symbol}: {reasons} | Spread {spread:.3f}%")
 
     if found == 0:
-        print(f"SCAN DONE - 0 signals (92/100 strict, normal)")
+        print(f"SCAN DONE - 0 signals - All filtered correctly")
 
 if __name__ == "__main__":
     main()
