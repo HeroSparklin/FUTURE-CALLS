@@ -89,7 +89,7 @@ def analyze_tf(ex, symbol, tf):
         return "NEUTRAL"
 
 def main():
-    ex = ccxt.binance({'enableRateLimit': True, 'timeout': 10000})
+    ex = ccxt.okx({'enableRateLimit': True, 'timeout': 10000})
     try:
         ex.load_markets()
     except Exception as e:
@@ -266,27 +266,22 @@ def main():
     except Exception as e:
         print(f"Scan error: {e}")
 
-    # --- ALIVE EVERY 4HRS - NEW, DOES NOT TOUCH FILTERS ---
+    # --- ALIVE EVERY 4HRS - FIXED TO SEND ONCE ---
     if found == 0:
         print("SCAN DONE - 0 signals - filtered correctly")
         now_utc = datetime.now(timezone.utc)
         hour = now_utc.hour
-        # 4hr block: 0,4,8,12,16,20 UTC = 01,05,09,13,17,21 Lagos
-        if hour % 4 == 0:
-            block = now_utc.strftime("%Y-%m-%d-%H")  # unique per 4hr window
-            last_block = load_alive()
-            if last_block != block:  # send only once per window
-                send_telegram(
-                    f"✅ *Bot Alive*\n"
-                    f"Scanned: {len(final_coins)} coins\n"
-                    f"BTC: {btc_trend} {btc_vol:.2f}% {btc_regime}\n"
-                    f"Signals: 0 - filtering correctly\n"
-                    f"Time: {now_utc.strftime('%H:%M')} UTC / {(now_utc+timedelta(hours=1)).strftime('%H:%M')} Lagos"
-                )
-                save_alive(block)
-                print(f"ALIVE SENT block {block}")
-            else:
-                print(f"ALIVE already sent for {block}, skipping duplicate")
+        minute = now_utc.minute
+        # 0,4,8,12,16,20 UTC = 01,05,09,13,17,21 Lagos, only first run of hour (00-04 min)
+        if hour % 4 == 0 and minute < 5:
+            send_telegram(
+                f"✅ *Bot Alive*\n"
+                f"Scanned: {len(final_coins)} coins\n"
+                f"BTC: {btc_trend} {btc_vol:.2f}% {btc_regime}\n"
+                f"Signals: 0 - filtering correctly\n"
+                f"Time: {now_utc.strftime('%H:%M')} UTC / {(now_utc+timedelta(hours=1)).strftime('%H:%M')} Lagos"
+            )
+            print(f"ALIVE SENT {now_utc.strftime('%H:%M')} UTC")
 
 if __name__ == "__main__":
     main()
