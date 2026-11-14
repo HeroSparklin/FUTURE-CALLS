@@ -5,6 +5,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 WAT = timezone(timedelta(hours=1))
 ALIVE_FILE = "last_alive.json"
+ALIVE_MODE = os.getenv("ALIVE_MODE", "0") == "1"
 
 # --- Helpers ---
 def send_telegram(msg):
@@ -122,13 +123,26 @@ def main():
     except Exception as e:
         print(f"BTC error: {e}")
 
+    # --- ALIVE ONLY MODE - ONLY NEW PART - fixes 1am miss ---
+    # Runs only from alive.yml, does NOT touch scan/filters
+    if ALIVE_MODE:
+        now_utc = datetime.now(timezone.utc)
+        now_lagos = now_utc + timedelta(hours=1)
+        send_telegram(
+            f"✅ *Bot Alive*\n"
+            f"BTC: {btc_trend} {btc_vol:.2f}% {btc_regime}\n"
+            f"Signals: scanning every 5 mins\n"
+            f"Time: {now_utc.strftime('%H:%M')} UTC / {now_lagos.strftime('%H:%M')} Lagos"
+        )
+        print(f"ALIVE SENT via ALIVE_MODE {now_utc.strftime('%H:%M')} UTC")
+        return
+
     # --- SCAN - 12 FILTERS LOCKED - UNCHANGED ---
     final_coins = []
     found = 0
     try:
         tickers = ex.fetch_tickers()
         usdt = {k: v for k, v in tickers.items() if '/USDT' in k and ':USDT' not in k}
-        # Top by volume, same as before
         sorted_tickers = sorted(usdt.items(), key=lambda x: x[1].get('quoteVolume', 0) or 0, reverse=True)[:80]
         final_coins = [k for k, v in sorted_tickers]
 
@@ -266,22 +280,11 @@ def main():
     except Exception as e:
         print(f"Scan error: {e}")
 
-    # --- ALIVE EVERY 4HRS - FIXED TO SEND ONCE ---
+    # --- ALIVE IN SCAN BOT - REMOVED ---
+    # Alive is now ONLY from alive.yml, so scan bot can never spam or miss.
+    # This prevents duplicates and the minute<5 bug.
     if found == 0:
         print("SCAN DONE - 0 signals - filtered correctly")
-        now_utc = datetime.now(timezone.utc)
-        hour = now_utc.hour
-        minute = now_utc.minute
-        # 0,4,8,12,16,20 UTC = 01,05,09,13,17,21 Lagos, only first run of hour (00-04 min)
-        if hour % 4 == 0 and minute < 5:
-            send_telegram(
-                f"✅ *Bot Alive*\n"
-                f"Scanned: {len(final_coins)} coins\n"
-                f"BTC: {btc_trend} {btc_vol:.2f}% {btc_regime}\n"
-                f"Signals: 0 - filtering correctly\n"
-                f"Time: {now_utc.strftime('%H:%M')} UTC / {(now_utc+timedelta(hours=1)).strftime('%H:%M')} Lagos"
-            )
-            print(f"ALIVE SENT {now_utc.strftime('%H:%M')} UTC")
 
 if __name__ == "__main__":
     main()
