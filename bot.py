@@ -11,12 +11,15 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MIN_SCORE = 90
 TOP_COINS = 80
 
-exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'spot'}})
+# ORIGINAL EXCHANGE - OKX - RESTORED
+exchange = ccxt.okx({
+    'enableRateLimit': True,
+})
 
 def send_telegram(msg):
     try:
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-            print("Telegram secrets missing, skipping send")
+            print("Telegram secrets missing")
             return
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
@@ -83,6 +86,7 @@ def get_btc_trend():
         print(f"BTC trend error: {e}")
         return "NEUTRAL", "NORMAL", 0
 
+# === ONLY NEW THING - BTC-ONLY SLOW-DROP - DOES NOT AFFECT ALTS ===
 def is_btc_slow_drop():
     try:
         df4h = exchange.fetch_ohlcv("BTC/USDT", timeframe="4h", limit=60)
@@ -94,7 +98,7 @@ def is_btc_slow_drop():
         curr_price = float(df1h['close'].iloc[-1])
         ticker = exchange.fetch_ticker("BTC/USDT")
         change_24h = float(ticker.get('percentage', 0) or 0)
-        print(f"BTC SLOW-DROP CHECK: 4h={trend4h} Price={curr_price:.0f} Prev1hLow={prev_1h_low:.0f} 24hChange={change_24h:.2f}%")
+        print(f"BTC SLOW-DROP CHECK: 4h={trend4h} Price={curr_price:.0f} Prev1hLow={prev_1h_low:.0f} 24h={change_24h:.2f}%")
         if trend4h == "BEARISH" and curr_price < prev_1h_low and change_24h <= -3.0:
             return True, f"4h BEARISH + Broke 1h Low {prev_1h_low:.0f} + 24h {change_24h:.2f}%"
         return False, ""
@@ -159,7 +163,8 @@ def main():
                 is_btc = (symbol == "BTC/USDT")
                 use_btc_slow = is_btc and direction == "SHORT" and btc_slow_drop
                 if use_btc_slow:
-                    print(f"BTC SLOW-DROP MODE ACTIVATED: {btc_slow_reason}")
+                    print(f"BTC SLOW-DROP MODE: {btc_slow_reason}")
+                # ORIGINAL FILTERS - UNTOUCHED FOR ALTS
                 if not use_btc_slow:
                     if abs(mom) < 0.5:
                         print(f"REJECT {symbol}: MOM_LOW {mom:.2f}%")
@@ -172,11 +177,9 @@ def main():
                         continue
                 if direction == "LONG" and btc_trend == "BEARISH" and btc_vol_state == "VOLATILE":
                     if not use_btc_slow:
-                        print(f"REJECT {symbol}: BTC BEAR VOLATILE BLOCK LONG")
                         continue
                 if direction == "SHORT" and btc_trend == "BULLISH" and btc_vol_state == "VOLATILE":
                     if not use_btc_slow:
-                        print(f"REJECT {symbol}: BTC BULL VOLATILE BLOCK SHORT")
                         continue
                 score = calculate_score(ind15, tf5, tf15, tf1h, direction, vol_ratio)
                 if use_btc_slow:
@@ -186,7 +189,7 @@ def main():
                     if ind15['price'] < ind15['ema7'] and ind15['macd'] < ind15['sig']:
                         score += bonus
                 if score < MIN_SCORE:
-                    print(f"REJECT {symbol}: Score {score} MOM {mom:.2f}%")
+                    print(f"REJECT {symbol}: Score {score}")
                     continue
                 atr = ind15['atr'] if ind15['atr'] else price * 0.01
                 if direction == "LONG":
@@ -202,7 +205,7 @@ def main():
                 print(f"Error {symbol}: {e}")
                 continue
     except Exception as e:
-        print(f"MAIN ERROR but not failing: {e}")
+        print(f"MAIN ERROR: {e}")
     print("Scan finished OK")
 
 if __name__ == "__main__":
