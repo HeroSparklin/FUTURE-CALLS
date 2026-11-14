@@ -11,7 +11,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MIN_SCORE = 90
 TOP_COINS = 80
 
-# ORIGINAL EXCHANGE - OKX - RESTORED
+# OKX LOCKED - DO NOT CHANGE
 exchange = ccxt.okx({
     'enableRateLimit': True,
 })
@@ -22,7 +22,7 @@ def send_telegram(msg):
             print("Telegram secrets missing")
             return
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=15)
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -86,7 +86,6 @@ def get_btc_trend():
         print(f"BTC trend error: {e}")
         return "NEUTRAL", "NORMAL", 0
 
-# === ONLY NEW THING - BTC-ONLY SLOW-DROP - DOES NOT AFFECT ALTS ===
 def is_btc_slow_drop():
     try:
         df4h = exchange.fetch_ohlcv("BTC/USDT", timeframe="4h", limit=60)
@@ -164,7 +163,6 @@ def main():
                 use_btc_slow = is_btc and direction == "SHORT" and btc_slow_drop
                 if use_btc_slow:
                     print(f"BTC SLOW-DROP MODE: {btc_slow_reason}")
-                # ORIGINAL FILTERS - UNTOUCHED FOR ALTS
                 if not use_btc_slow:
                     if abs(mom) < 0.5:
                         print(f"REJECT {symbol}: MOM_LOW {mom:.2f}%")
@@ -196,8 +194,12 @@ def main():
                     tp1 = price + atr * 1.5; tp2 = price + atr * 3.0; sl = price - atr * 1.0
                 else:
                     tp1 = price - atr * 1.5; tp2 = price - atr * 3.0; sl = price + atr * 1.0
-                extra = f"\n⚠️ BTC SLOW-DROP: {btc_slow_reason}" if use_btc_slow else ""
-                msg = f"🚨 *SIGNAL {symbol} {direction}* Score {score}\nPrice: {price}\n24h: {change:.2f}%\nMOM: {mom:.2f}% | Vol: {vol_ratio:.2f}x | RSI: {rsi:.1f}\nTF: 5m {tf5} | 15m {tf15} | 1h {tf1h} | 4h {tf4h}\nTP1: {tp1:.4f} | TP2: {tp2:.4f} | SL: {sl:.4f}{extra}"
+                
+                # NEW FORMAT WITH ENTRY / SL / LEVERAGE
+                leverage = "10x - 20x" if vol_ratio >= 1.3 else "5x - 10x"
+                extra = f"\n\n⚠️ BTC SLOW-DROP: {btc_slow_reason}" if use_btc_slow else ""
+                msg = f"🚨 SIGNAL {symbol} {direction}\nScore {score}\n\nENTRY: {price:.4f}\nTP1: {tp1:.4f} | TP2: {tp2:.4f}\nSL: {sl:.4f}\n\nLeverage: {leverage} (Isolated)\n24h: {change:.2f}% | MOM: {mom:.2f}% | Vol: {vol_ratio:.2f}x | RSI: {rsi:.1f}\nTF: 5m {tf5} | 15m {tf15} | 1h {tf1h} | 4h {tf4h}{extra}"
+                
                 print(msg)
                 send_telegram(msg)
                 time.sleep(1)
