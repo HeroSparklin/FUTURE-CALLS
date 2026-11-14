@@ -1,2 +1,4 @@
-ccxt
-requests
+ccxt==4.2.25
+pandas==2.2.2
+numpy==1.26.4
+requests==2.32.3
