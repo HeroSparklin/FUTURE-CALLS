@@ -24,7 +24,7 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# --- EXCHANGE ---
+# --- EXCHANGE - OKX LOCKED ---
 exchange = ccxt.okx({'enableRateLimit': True})
 
 def get_ohlcv(symbol, timeframe, limit=120):
@@ -82,7 +82,8 @@ def get_btc_trend():
         last_4h = df_4h.iloc[-1]
 
         atr_pct = (last['atr'] / last['close']) * 100 if last['atr'] else 0
-        is_volatile = atr_pct > 0.8
+        # FIXED: was 0.8% (too sensitive), now 2% as you wanted
+        is_volatile = atr_pct > 2.0
         change_24h = ((last['close'] - df_1h.iloc[-25]['close']) / df_1h.iloc[-25]['close']) * 100 if len(df_1h) > 25 else 0
 
         if last_4h['ema7'] < last_4h['ema25'] and change_24h < -3:
@@ -101,6 +102,7 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         ticker = exchange.fetch_ticker(symbol)
         spread = ((ticker['ask'] - ticker['bid']) / ticker['bid']) * 100 if ticker['bid'] else 999
         if spread > 0.15:
+            print(f"{symbol} REJECT spread {spread:.3f}%")
             return None
         change_24h = ticker['percentage'] if ticker['percentage'] else 0
         if abs(change_24h) < 3:
@@ -116,8 +118,19 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         momentum = ((c1h['close'] - df_1h.iloc[-2]['close']) / df_1h.iloc[-2]['close']) * 100
         if abs(momentum) < 0.5:
             return None
+
+        # === NEW: CRASH MODE - Filter #15 ===
+        # Catches INJ -100% / BTC 67k->63k type moves
+        is_crash_short = change_24h <= -12 or momentum <= -3.0
+        is_crash_long = change_24h >= 12 or momentum >= 3.0
+        is_crash = is_crash_short or is_crash_long
+        if is_crash:
+            print(f"{symbol} CRASH MODE ON: 24h {change_24h:.1f}% Mom {momentum:.2f}%")
+
         ema_dist = abs((c1h['close'] - c1h['ema7']) / c1h['ema7']) * 100
-        if ema_dist > 3.5:
+        # BYPASS EMA DISTANCE IN CRASH MODE
+        if not is_crash and ema_dist > 3.5:
+            print(f"{symbol} REJECT ema_dist {ema_dist:.2f}%")
             return None
 
         long_stack = c1h['ema7'] > c1h['ema25'] > c1h['ema99']
@@ -128,40 +141,71 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         elif short_stack and c1h['close'] < c1h['sma200']:
             direction = "SHORT"
         else:
-            return None
+            # In crash, allow direction even if SMA200 not perfect, use EMA stack only
+            if is_crash:
+                if long_stack: direction = "LONG"
+                elif short_stack: direction = "SHORT"
+                else: return None
+            else:
+                return None
+
+        # If crash direction mismatches 24h, force it
+        if is_crash_short: direction = "SHORT"
+        if is_crash_long: direction = "LONG"
 
         def tf_dir(df):
             last = df.iloc[-1]
             return "LONG" if last['ema7'] > last['ema25'] else "SHORT" if last['ema7'] < last['ema25'] else None
 
-        if tf_dir(df_5m) != direction or tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
-            return None
+        # In crash, only need 15m + 1h to align, ignore 5m (5m whipsaws in crash)
+        if is_crash:
+            if tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
+                print(f"{symbol} REJECT crash TF 15m/1h mismatch")
+                return None
+        else:
+            if tf_dir(df_5m) != direction or tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
+                return None
 
         rsi = c1h['rsi']
-        if direction == "LONG" and not (55 <= rsi <= 75): return None
-        if direction == "SHORT" and not (20 <= rsi <= 45): return None
-        if direction == "LONG" and not (c1h['macd'] > c1h['macd_signal'] and c1h['macd_hist'] > 0): return None
-        if direction == "SHORT" and not (c1h['macd'] < c1h['macd_signal'] and c1h['macd_hist'] < 0): return None
+        # BYPASS RSI IN CRASH MODE - crash RSI is 5-10, normal filter would kill it
+        if not is_crash:
+            if direction == "LONG" and not (55 <= rsi <= 75): return None
+            if direction == "SHORT" and not (20 <= rsi <= 45): return None
+            if direction == "LONG" and not (c1h['macd'] > c1h['macd_signal'] and c1h['macd_hist'] > 0): return None
+            if direction == "SHORT" and not (c1h['macd'] < c1h['macd_signal'] and c1h['macd_hist'] < 0): return None
+        else:
+            # In crash, only check MACD direction, not RSI
+            if direction == "LONG" and not (c1h['macd_hist'] > 0): return None
+            if direction == "SHORT" and not (c1h['macd_hist'] < 0): return None
 
         vol_ratio = c1h['volume'] / c1h['vol_avg'] if c1h['vol_avg'] else 0
         if vol_ratio < 1.3: return None
-        if btc_trend == "BEARISH_SLOW_DROP" and direction == "LONG": return None
-        if btc_volatile:
-            if btc_trend == "BULLISH" and direction == "SHORT": return None
-            if btc_trend == "BEARISH" and direction == "LONG": return None
 
-        score = 70
-        if vol_ratio > 1.8: score += 10
-        elif vol_ratio > 1.5: score += 5
-        if abs(momentum) > 1.5: score += 10
-        elif abs(momentum) > 1.0: score += 5
-        if direction == "LONG" and 60 <= rsi <= 70: score += 5
-        if direction == "SHORT" and 25 <= rsi <= 40: score += 5
-        if score > 100: score = 100
-        if score < 90: return None
+        # BYPASS BTC BLOCKS IN CRASH MODE
+        if not is_crash:
+            if btc_trend == "BEARISH_SLOW_DROP" and direction == "LONG": return None
+            if btc_volatile:
+                if btc_trend == "BULLISH" and direction == "SHORT": return None
+                if btc_trend == "BEARISH" and direction == "LONG": return None
 
-        # DYNAMIC LEVERAGE BY CERTAINTY
-        if score >= 98:
+        # SCORE - Crash gets auto 95
+        if is_crash:
+            score = 95
+        else:
+            score = 70
+            if vol_ratio > 1.8: score += 10
+            elif vol_ratio > 1.5: score += 5
+            if abs(momentum) > 1.5: score += 10
+            elif abs(momentum) > 1.0: score += 5
+            if direction == "LONG" and 60 <= rsi <= 70: score += 5
+            if direction == "SHORT" and 25 <= rsi <= 40: score += 5
+            if score > 100: score = 100
+            if score < 90: return None
+
+        # DYNAMIC LEVERAGE - Crash mode uses 5x max for safety, not 20x
+        if is_crash:
+            lev, certainty = 5, "CRASH MODE"
+        elif score >= 98:
             lev, certainty = 20, "VERY HIGH"
         elif score >= 96:
             lev, certainty = 10, "HIGH"
@@ -173,7 +217,7 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         atr, price = c1h['atr'], c1h['close']
         sl, tp = (price - atr*1.5, price + atr*3) if direction == "LONG" else (price + atr*1.5, price - atr*3)
 
-        return {'symbol':symbol,'direction':direction,'price':price,'sl':sl,'tp':tp,'score':score,'lev':lev,'certainty':certainty,'rsi':rsi,'vol_ratio':vol_ratio,'momentum':momentum}
+        return {'symbol':symbol,'direction':direction,'price':price,'sl':sl,'tp':tp,'score':score,'lev':lev,'certainty':certainty,'rsi':rsi,'vol_ratio':vol_ratio,'momentum':momentum,'is_crash':is_crash}
     except Exception as e:
         print(f"Analyze error {symbol}: {e}")
         return None
@@ -204,13 +248,14 @@ def main():
 
     if signals:
         for s in signals:
-            msg = f"""🚀 SIGNAL {s['direction']} {s['symbol']}
+            crash_tag = " 🔥 CRASH" if s.get('is_crash') else ""
+            msg = f"""🚀 SIGNAL {s['direction']} {s['symbol']}{crash_tag}
 
 💰 Entry: {s['price']:.6f}
 🛑 SL: {s['sl']:.6f}
 🎯 TP: {s['tp']:.6f}
 
-⚡ Leverage: {s['lev']}x ({s['certainty']} Certainty - Score {s['score']})
+⚡ Leverage: {s['lev']}x ({s['certainty']} - Score {s['score']})
 📊 RSI: {s['rsi']:.1f} | Vol: {s['vol_ratio']:.2f}x | Mom: {s['momentum']:.2f}%
 🧠 BTC: {btc_trend}
 ⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"""
