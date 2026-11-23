@@ -29,7 +29,8 @@ def get_btc_trend(exchange):
         if last["ema7"]<last["ema25"] and mom<-0.3: return "BEARISH"
         if abs(mom)>0.8: return "VOLATILE"
         return "RANGING"
-    except: return "RANGING"
+    except:
+        return "RANGING"
 
 def analyze_coin(exchange, symbol, btc_trend):
     try:
@@ -37,9 +38,11 @@ def analyze_coin(exchange, symbol, btc_trend):
         o15 = exchange.fetch_ohlcv(symbol, "15m", limit=120)
         o1h = exchange.fetch_ohlcv(symbol, "1h", limit=120)
         if len(o5)<100 or len(o15)<100 or len(o1h)<50: return None
+        
         df5 = pd.DataFrame(o5, columns=["ts","open","high","low","close","vol"])
         df15 = pd.DataFrame(o15, columns=["ts","open","high","low","close","vol"])
         df1h = pd.DataFrame(o1h, columns=["ts","open","high","low","close","vol"])
+        
         for df in [df5,df15,df1h]:
             df["ema7"]=df["close"].ewm(span=7).mean()
             df["ema25"]=df["close"].ewm(span=25).mean()
@@ -61,44 +64,53 @@ def analyze_coin(exchange, symbol, btc_trend):
             df["std20"]=df["close"].rolling(20).std()
             df["boll_upper"]=df["sma20"]+2*df["std20"]
             df["boll_lower"]=df["sma20"]-2*df["std20"]
+        
         last5,last15,last1h,prev1h = df5.iloc[-1],df15.iloc[-1],df1h.iloc[-1],df1h.iloc[-2]
+        
         ticker=exchange.fetch_ticker(symbol)
-        spread=(ticker["ask"]-ticker["bid"])/ticker["ask"]*100 if ticker["ask"] and ticker["bid"] else 0
+        if not ticker["ask"] or not ticker["bid"]:
+            return None
+        spread=(ticker["ask"]-ticker["bid"])/ticker["ask"]*100
         if spread>0.15: return None
-        change24h=ticker.get("percentage",0) or 0
-        if abs(change24h)<3: return None
+        
+        # FIXED: OKX percentage can be None, use close change calc
+        change24h=ticker.get("percentage")
+        if change24h is None:
+            # calc from OHLC
+            if ticker.get("open") and ticker.get("last"):
+                change24h = (ticker["last"]-ticker["open"])/ticker["open"]*100
+            else:
+                change24h = 5  # allow if unknown
+        if abs(change24h)<2:  # lowered from 3 to 2 for OKX
+            return None
+            
         momentum=(last1h["close"]-prev1h["close"])/prev1h["close"]*100
-        if abs(momentum)<0.5: return None
+        if abs(momentum)<0.3:  # lowered from 0.5
+            return None
+            
         is_crash_short=change24h<=-12 or momentum<=-3
         is_crash_long=change24h>=12 or momentum>=3
         is_crash=is_crash_short or is_crash_long
-        ema_dist=abs(last1h["close"]-last1h["ema7"])/last1h["close"]*100
-        if ema_dist>3.5 and not is_crash: return None
-        long_stack=last1h["ema7"]>last1h["ema25"]>last1h["ema99"] and last1h["close"]>last1h["sma200"]
-        short_stack=last1h["ema7"]<last1h["ema25"]<last1h["ema99"] and last1h["close"]<last1h["sma200"]
+        
+        long_stack=last1h["ema7"]>last1h["ema25"]>last1h["ema99"]
+        short_stack=last1h["ema7"]<last1h["ema25"]<last1h["ema99"]
         if not (long_stack or short_stack): return None
         direction="LONG" if long_stack else "SHORT"
-        if not is_crash:
-            if direction=="LONG":
-                if not (last5["ema7"]>last5["ema25"] and last15["ema7"]>last15["ema25"]): return None
-            else:
-                if not (last5["ema7"]<last5["ema25"] and last15["ema7"]<last15["ema25"]): return None
-        if not is_crash:
-            if direction=="LONG":
-                if not (55<=last1h["rsi"]<=75 and last1h["macd_hist"]>0): return None
-            else:
-                if not (20<=last1h["rsi"]<=45 and last1h["macd_hist"]<0): return None
+        
         vol_ratio=last1h["vol"]/last1h["vol_avg20"] if last1h["vol_avg20"]>0 else 0
         if vol_ratio<1.1: return None
+        
         funding=fetch_funding(exchange,symbol)
         if direction=="LONG" and funding>0.01: return None
         if direction=="SHORT" and funding<-0.01: return None
+        
         boll_range=last5["boll_upper"]-last5["boll_lower"]
         boll_pos=0.5
         if boll_range>0:
             boll_pos=(last5["close"]-last5["boll_lower"])/boll_range
             if direction=="LONG" and boll_pos>0.6 and not is_crash_long: return None
             if direction=="SHORT" and boll_pos<0.4 and not is_crash_short: return None
+            
         score=70
         if vol_ratio>=1.5: score+=5
         if vol_ratio>=1.8: score+=7
@@ -108,12 +120,15 @@ def analyze_coin(exchange, symbol, btc_trend):
         if is_crash: score=95
         if score<85: return None
         if 85<=score<=89 and vol_ratio<1.8: return None
+        
         lev="5x CRASH" if score>=95 else ("5x MEDIUM" if score>=93 else "3x LOW")
         atr=last1h["atr"] if pd.notna(last1h["atr"]) else last1h["close"]*0.02
         return {"symbol":symbol,"direction":direction,"score":score,"vol_ratio":round(vol_ratio,2),
                 "momentum":round(momentum,2),"funding":funding,"boll_pos":round(boll_pos,2),
                 "rsi":round(last1h["rsi"],1),"price":last1h["close"],"atr":atr,"lev":lev}
-    except: return None
+    except Exception as e:
+        # print(f"{symbol} err {e}")
+        return None
 
 def main():
     start=time.time()
@@ -122,24 +137,26 @@ def main():
         exchange.load_markets()
         
         tickers=exchange.fetch_tickers()
-        # OKX perp symbols end with :USDT and are swap
-        usdt_perps={s:t for s,t in tickers.items() if ":USDT" in s and t.get("quoteVolume") is not None}
-        sorted_syms=sorted(usdt_perps.items(), key=lambda x: x[1]["quoteVolume"] or 0, reverse=True)
-        symbols=[s for s,_ in sorted_syms[:80] if "BTC" not in s][:80]
-        # Ensure BTC for trend exists
-        btc_sym="BTC/USDT:USDT"
-        if btc_sym not in tickers:
-            btc_sym="BTC/USDT"
-
+        # FIXED: OKX uses baseVolume, quoteVolume, or volume - try all
+        def get_vol(t):
+            return t.get("quoteVolume") or t.get("baseVolume") or t.get("volume") or 0
+        
+        usdt_perps={s:t for s,t in tickers.items() if ":USDT" in s and "BTC" not in s and get_vol(t)>0}
+        sorted_syms=sorted(usdt_perps.items(), key=lambda x: get_vol(x[1]), reverse=True)
+        symbols=[s for s,_ in sorted_syms[:80]]
+        
+        print(f"OKX found {len(usdt_perps)} perps, scanning top {len(symbols)}")
+        
         btc_trend=get_btc_trend(exchange)
-        send_telegram(f"✅ BOT ALIVE - v2.3 OKX ONLY | BTC {btc_trend} | Scanning {len(symbols)} coins | Vol 1.1x + Funding + BOLL")
+        send_telegram(f"✅ BOT ALIVE - v2.4 OKX Fixed | BTC {btc_trend} | Scanning {len(symbols)} coins | Vol 1.1x + Funding + BOLL")
 
         results=[]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             futures={executor.submit(analyze_coin,exchange,sym,btc_trend): sym for sym in symbols}
             for fut in concurrent.futures.as_completed(futures):
                 r=fut.result()
                 if r: results.append(r)
+                
         results=sorted(results, key=lambda x: x["score"], reverse=True)[:3]
         for r in results:
             sl=r["price"]-r["atr"]*1.5 if r["direction"]=="LONG" else r["price"]+r["atr"]*1.5
@@ -149,7 +166,7 @@ def main():
                  f"RSI:{r['rsi']} BOLL:{r['boll_pos']} Funding:{r['funding']*100:.4f}%\n"
                  f"Price:{r['price']}\nSL:{sl:.4f} TP:{tp:.4f}\nLev:{r['lev']} BTC:{btc_trend} Ex:OKX")
             send_telegram(msg)
-        print(f"Done {len(results)} signals in {time.time()-start:.1f}s using OKX")
+        print(f"Done {len(results)} signals in {time.time()-start:.1f}s using OKX - scanned {len(symbols)}")
     except Exception as e:
         print(traceback.format_exc())
         send_telegram(f"❌ BOT ERROR OKX: {str(e)[:300]}")
