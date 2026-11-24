@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-# --- TELEGRAM CONFIG - FIXED FOR YOUR YML ---
+# --- TELEGRAM CONFIG ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHANNEL_ID")
 
@@ -56,7 +56,7 @@ def calc_indicators(df):
         df['macd'] = ema12 - ema26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
-        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1)))))
+        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
         df['atr'] = df['tr'].rolling(14).mean()
         df['vol_avg'] = df['volume'].rolling(20).mean()
         return df
@@ -67,7 +67,6 @@ def calc_indicators(df):
 def check_orderbook(symbol, price):
     try:
         ob = exchange.fetch_order_book(symbol, limit=20)
-        # Sum depth within 1% of price
         bid_depth = sum([p * q for p, q in ob['bids'] if p >= price * 0.99])
         ask_depth = sum([p * q for p, q in ob['asks'] if p <= price * 1.01])
         total = bid_depth + ask_depth
@@ -121,9 +120,7 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             print(f"{symbol} REJECT spread {spread:.3f}%")
             return None
 
-        # === NEW v2.7: VOLUME + MCAP PROXY FILTER ===
-        # OKX ticker has no mcap, so we use quoteVolume as liquidity proxy
-        # quoteVolume OR baseVolume*price to fix OKX 2.1s bug
+        # === NEW v2.7: VOLUME FILTER ===
         qv = ticker.get('quoteVolume') or 0
         bv = ticker.get('baseVolume') or 0
         price_t = ticker.get('last') or ticker.get('close') or 0
@@ -201,7 +198,7 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         vol_ratio = c1h['volume'] / c1h['vol_avg'] if c1h['vol_avg'] else 0
         if vol_ratio < 1.3: return None
 
-        # === NEW v2.7: CRASH MODE MUST HAVE VOLUME CONFIRMATION ===
+        # === NEW v2.7: CRASH MUST HAVE VOLUME ===
         if is_crash and vol_ratio < 1.8:
             print(f"{symbol} REJECT crash no volume Vol {vol_ratio:.2f}x < 1.8x")
             return None
@@ -212,12 +209,10 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
                 if btc_trend == "BULLISH" and direction == "SHORT": return None
                 if btc_trend == "BEARISH" and direction == "LONG": return None
 
-        # === NEW v2.7: ORDER BOOK CHECK ONLY AFTER ALL OTHER FILTERS PASS ===
-        # This keeps it fast - only checks OB for coins that already passed
+        # === NEW v2.7: ORDER BOOK LAST ===
         if not check_orderbook(symbol, c1h['close']):
             return None
 
-        # SCORE - Crash gets 95 ONLY if it passed volume + OB above
         if is_crash:
             score = 95
         else:
@@ -231,7 +226,7 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             if score > 100: score = 100
             if score < 90: return None
 
-        # === NEW v2.7: LEVERAGE CAPPED AT 10x - 20x REMOVED ===
+        # === NEW v2.7: LEVERAGE CAPPED AT 10x ===
         if is_crash:
             lev, certainty = 5, "CRASH MODE"
         elif score >= 96:
@@ -255,7 +250,6 @@ def main():
     print(f"BTC Trend: {btc_trend} Volatile: {btc_volatile} Change: {btc_change:.2f}%")
     try:
         tickers = exchange.fetch_tickers()
-        # FIXED: quoteVolume OR baseVolume*price OR volume
         pairs = []
         for s, t in tickers.items():
             if not s.endswith('/USDT') or ':USDT' in s: continue
