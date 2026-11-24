@@ -56,12 +56,32 @@ def calc_indicators(df):
         df['macd'] = ema12 - ema26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
-        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
+        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1)))))
         df['atr'] = df['tr'].rolling(14).mean()
         df['vol_avg'] = df['volume'].rolling(20).mean()
         return df
     except:
         return None
+
+# === NEW v2.7: ORDER BOOK DEPTH CHECK ===
+def check_orderbook(symbol, price):
+    try:
+        ob = exchange.fetch_order_book(symbol, limit=20)
+        # Sum depth within 1% of price
+        bid_depth = sum([p * q for p, q in ob['bids'] if p >= price * 0.99])
+        ask_depth = sum([p * q for p, q in ob['asks'] if p <= price * 1.01])
+        total = bid_depth + ask_depth
+        print(f"{symbol} OB Bid ${bid_depth:,.0f} Ask ${ask_depth:,.0f} Total ${total:,.0f}")
+        if bid_depth < 50000 or ask_depth < 50000:
+            print(f"{symbol} REJECT orderbook thin - Bid ${bid_depth:,.0f} Ask ${ask_depth:,.0f}")
+            return False
+        if total < 100000:
+            print(f"{symbol} REJECT orderbook total ${total:,.0f} < $100k")
+            return False
+        return True
+    except Exception as e:
+        print(f"{symbol} OB error: {e} - FAIL SAFE REJECT")
+        return False
 
 def get_btc_trend():
     try:
@@ -72,7 +92,6 @@ def get_btc_trend():
         if df_1h is None or len(df_1h) < 50:
             return "NORMAL", False, 0
         last = df_1h.iloc[-1]
-
         df_4h_raw = get_ohlcv('BTC/USDT', '4h', 50)
         if df_4h_raw is None:
             return "BULLISH" if last['ema7'] > last['ema25'] else "NORMAL", False, 0
@@ -80,12 +99,9 @@ def get_btc_trend():
         if df_4h is None:
             return "NORMAL", False, 0
         last_4h = df_4h.iloc[-1]
-
         atr_pct = (last['atr'] / last['close']) * 100 if last['atr'] else 0
-        # FIXED: was 0.8% (too sensitive), now 2% as you wanted
         is_volatile = atr_pct > 2.0
         change_24h = ((last['close'] - df_1h.iloc[-25]['close']) / df_1h.iloc[-25]['close']) * 100 if len(df_1h) > 25 else 0
-
         if last_4h['ema7'] < last_4h['ema25'] and change_24h < -3:
             return "BEARISH_SLOW_DROP", is_volatile, change_24h
         if last['ema7'] > last['ema25'] and last['close'] > last['sma200']:
@@ -104,6 +120,18 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         if spread > 0.15:
             print(f"{symbol} REJECT spread {spread:.3f}%")
             return None
+
+        # === NEW v2.7: VOLUME + MCAP PROXY FILTER ===
+        # OKX ticker has no mcap, so we use quoteVolume as liquidity proxy
+        # quoteVolume OR baseVolume*price to fix OKX 2.1s bug
+        qv = ticker.get('quoteVolume') or 0
+        bv = ticker.get('baseVolume') or 0
+        price_t = ticker.get('last') or ticker.get('close') or 0
+        vol_usd = qv if qv else (bv * price_t if bv and price_t else 0)
+        if vol_usd < 5000000:
+            print(f"{symbol} REJECT vol ${vol_usd:,.0f} < $5M")
+            return None
+
         change_24h = ticker['percentage'] if ticker['percentage'] else 0
         if abs(change_24h) < 3:
             return None
@@ -119,8 +147,6 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         if abs(momentum) < 0.5:
             return None
 
-        # === NEW: CRASH MODE - Filter #15 ===
-        # Catches INJ -100% / BTC 67k->63k type moves
         is_crash_short = change_24h <= -12 or momentum <= -3.0
         is_crash_long = change_24h >= 12 or momentum >= 3.0
         is_crash = is_crash_short or is_crash_long
@@ -128,7 +154,6 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             print(f"{symbol} CRASH MODE ON: 24h {change_24h:.1f}% Mom {momentum:.2f}%")
 
         ema_dist = abs((c1h['close'] - c1h['ema7']) / c1h['ema7']) * 100
-        # BYPASS EMA DISTANCE IN CRASH MODE
         if not is_crash and ema_dist > 3.5:
             print(f"{symbol} REJECT ema_dist {ema_dist:.2f}%")
             return None
@@ -141,7 +166,6 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         elif short_stack and c1h['close'] < c1h['sma200']:
             direction = "SHORT"
         else:
-            # In crash, allow direction even if SMA200 not perfect, use EMA stack only
             if is_crash:
                 if long_stack: direction = "LONG"
                 elif short_stack: direction = "SHORT"
@@ -149,7 +173,6 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             else:
                 return None
 
-        # If crash direction mismatches 24h, force it
         if is_crash_short: direction = "SHORT"
         if is_crash_long: direction = "LONG"
 
@@ -157,7 +180,6 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             last = df.iloc[-1]
             return "LONG" if last['ema7'] > last['ema25'] else "SHORT" if last['ema7'] < last['ema25'] else None
 
-        # In crash, only need 15m + 1h to align, ignore 5m (5m whipsaws in crash)
         if is_crash:
             if tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
                 print(f"{symbol} REJECT crash TF 15m/1h mismatch")
@@ -167,28 +189,35 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
                 return None
 
         rsi = c1h['rsi']
-        # BYPASS RSI IN CRASH MODE - crash RSI is 5-10, normal filter would kill it
         if not is_crash:
             if direction == "LONG" and not (55 <= rsi <= 75): return None
             if direction == "SHORT" and not (20 <= rsi <= 45): return None
             if direction == "LONG" and not (c1h['macd'] > c1h['macd_signal'] and c1h['macd_hist'] > 0): return None
             if direction == "SHORT" and not (c1h['macd'] < c1h['macd_signal'] and c1h['macd_hist'] < 0): return None
         else:
-            # In crash, only check MACD direction, not RSI
             if direction == "LONG" and not (c1h['macd_hist'] > 0): return None
             if direction == "SHORT" and not (c1h['macd_hist'] < 0): return None
 
         vol_ratio = c1h['volume'] / c1h['vol_avg'] if c1h['vol_avg'] else 0
         if vol_ratio < 1.3: return None
 
-        # BYPASS BTC BLOCKS IN CRASH MODE
+        # === NEW v2.7: CRASH MODE MUST HAVE VOLUME CONFIRMATION ===
+        if is_crash and vol_ratio < 1.8:
+            print(f"{symbol} REJECT crash no volume Vol {vol_ratio:.2f}x < 1.8x")
+            return None
+
         if not is_crash:
             if btc_trend == "BEARISH_SLOW_DROP" and direction == "LONG": return None
             if btc_volatile:
                 if btc_trend == "BULLISH" and direction == "SHORT": return None
                 if btc_trend == "BEARISH" and direction == "LONG": return None
 
-        # SCORE - Crash gets auto 95
+        # === NEW v2.7: ORDER BOOK CHECK ONLY AFTER ALL OTHER FILTERS PASS ===
+        # This keeps it fast - only checks OB for coins that already passed
+        if not check_orderbook(symbol, c1h['close']):
+            return None
+
+        # SCORE - Crash gets 95 ONLY if it passed volume + OB above
         if is_crash:
             score = 95
         else:
@@ -202,11 +231,9 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
             if score > 100: score = 100
             if score < 90: return None
 
-        # DYNAMIC LEVERAGE - Crash mode uses 5x max for safety, not 20x
+        # === NEW v2.7: LEVERAGE CAPPED AT 10x - 20x REMOVED ===
         if is_crash:
             lev, certainty = 5, "CRASH MODE"
-        elif score >= 98:
-            lev, certainty = 20, "VERY HIGH"
         elif score >= 96:
             lev, certainty = 10, "HIGH"
         elif score >= 93:
@@ -228,7 +255,15 @@ def main():
     print(f"BTC Trend: {btc_trend} Volatile: {btc_volatile} Change: {btc_change:.2f}%")
     try:
         tickers = exchange.fetch_tickers()
-        pairs = [(s, t['quoteVolume']) for s, t in tickers.items() if s.endswith('/USDT') and ':USDT' not in s and t.get('quoteVolume')]
+        # FIXED: quoteVolume OR baseVolume*price OR volume
+        pairs = []
+        for s, t in tickers.items():
+            if not s.endswith('/USDT') or ':USDT' in s: continue
+            qv = t.get('quoteVolume') or 0
+            bv = t.get('baseVolume') or 0
+            last = t.get('last') or t.get('close') or 0
+            vol = qv if qv else (bv * last if bv and last else t.get('volume') or 0)
+            if vol: pairs.append((s, vol))
         pairs.sort(key=lambda x: x[1], reverse=True)
         top_coins = [s for s, v in pairs[:80]]
     except Exception as e:
