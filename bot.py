@@ -1,152 +1,275 @@
-import os, ccxt, pandas as pd, requests, time, traceback
-import concurrent.futures
+import ccxt
+import pandas as pd
+import numpy as np
+import requests
+import os
+import time
+from datetime import datetime, timezone
 
-# FIX: Accept both names
+# --- TELEGRAM CONFIG - FIXED FOR YOUR YML ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHANNEL_ID")
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"Missing Telegram env - TOKEN exists: {bool(TELEGRAM_TOKEN)} CHAT exists: {bool(TELEGRAM_CHAT_ID)}")
+        print(f"Telegram not configured - Token: {bool(TELEGRAM_TOKEN)} Chat: {bool(TELEGRAM_CHAT_ID)}")
         return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-        print(f"Telegram sent: {r.status_code} {r.text[:200]}")
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=15)
+        if r.status_code == 200:
+            print("Telegram sent")
+        else:
+            print(f"Telegram failed: {r.text}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
-def fetch_funding(exchange, symbol):
-    try:
-        data = exchange.fetch_funding_rate(symbol)
-        return float(data.get("fundingRate", 0) or 0)
-    except: return 0.0
+# --- EXCHANGE - OKX LOCKED ---
+exchange = ccxt.okx({'enableRateLimit': True})
 
-def get_btc_trend(exchange):
+def get_ohlcv(symbol, timeframe, limit=120):
     try:
-        ohlcv = exchange.fetch_ohlcv("BTC/USDT:USDT", "1h", limit=50)
-        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-        df["ema7"] = df["close"].ewm(span=7).mean()
-        df["ema25"] = df["close"].ewm(span=25).mean()
-        last, prev = df.iloc[-1], df.iloc[-2]
-        mom = (last["close"]-prev["close"])/prev["close"]*100
-        if last["ema7"]>last["ema25"] and mom>0.3: return "BULLISH"
-        if last["ema7"]<last["ema25"] and mom<-0.3: return "BEARISH"
-        if abs(mom)>0.8: return "VOLATILE"
-        return "RANGING"
-    except: return "RANGING"
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        if not ohlcv:
+            return None
+        df = pd.DataFrame(ohlcv, columns=['ts','open','high','low','close','volume'])
+        return df
+    except Exception as e:
+        print(f"Error {symbol} {timeframe}: {e}")
+        return None
 
-def analyze_coin(exchange, symbol, btc_trend):
+def calc_indicators(df):
+    if df is None or len(df) < 50:
+        return None
     try:
-        o5 = exchange.fetch_ohlcv(symbol, "5m", limit=120)
-        o15 = exchange.fetch_ohlcv(symbol, "15m", limit=120)
-        o1h = exchange.fetch_ohlcv(symbol, "1h", limit=120)
-        if len(o5)<100 or len(o15)<100 or len(o1h)<50: return None
-        df5 = pd.DataFrame(o5, columns=["ts","open","high","low","close","vol"])
-        df15 = pd.DataFrame(o15, columns=["ts","open","high","low","close","vol"])
-        df1h = pd.DataFrame(o1h, columns=["ts","open","high","low","close","vol"])
-        for df in [df5,df15,df1h]:
-            df["ema7"]=df["close"].ewm(span=7).mean()
-            df["ema25"]=df["close"].ewm(span=25).mean()
-            df["ema99"]=df["close"].ewm(span=99).mean()
-            df["sma200"]=df["close"].ewm(span=200).mean()
-            delta=df["close"].diff()
-            gain=delta.where(delta>0,0).rolling(14).mean()
-            loss=-delta.where(delta<0,0).rolling(14).mean()
-            rs=gain/loss.replace(0,0.001)
-            df["rsi"]=100-(100/(1+rs))
-            ema12=df["close"].ewm(span=12).mean()
-            ema26=df["close"].ewm(span=26).mean()
-            df["macd"]=ema12-ema26
-            df["macd_signal"]=df["macd"].ewm(span=9).mean()
-            df["macd_hist"]=df["macd"]-df["macd_signal"]
-            df["vol_avg20"]=df["vol"].rolling(20).mean()
-            df["atr"]=(df["high"]-df["low"]).rolling(14).mean()
-            df["sma20"]=df["close"].rolling(20).mean()
-            df["std20"]=df["close"].rolling(20).std()
-            df["boll_upper"]=df["sma20"]+2*df["std20"]
-            df["boll_lower"]=df["sma20"]-2*df["std20"]
-        last5,last15,last1h,prev1h = df5.iloc[-1],df15.iloc[-1],df1h.iloc[-1],df1h.iloc[-2]
-        ticker=exchange.fetch_ticker(symbol)
-        if not ticker["ask"] or not ticker["bid"]: return None
-        spread=(ticker["ask"]-ticker["bid"])/ticker["ask"]*100
-        if spread>0.15: return None
-        change24h=ticker.get("percentage")
-        if change24h is None:
-            change24h = (ticker["last"]-ticker["open"])/ticker["open"]*100 if ticker.get("open") else 5
-        if abs(change24h)<2: return None
-        momentum=(last1h["close"]-prev1h["close"])/prev1h["close"]*100
-        if abs(momentum)<0.3: return None
-        long_stack=last1h["ema7"]>last1h["ema25"]>last1h["ema99"]
-        short_stack=last1h["ema7"]<last1h["ema25"]<last1h["ema99"]
-        if not (long_stack or short_stack): return None
-        direction="LONG" if long_stack else "SHORT"
-        vol_ratio=last1h["vol"]/last1h["vol_avg20"] if last1h["vol_avg20"]>0 else 0
-        if vol_ratio<1.1: return None
-        funding=fetch_funding(exchange,symbol)
-        if direction=="LONG" and funding>0.01: return None
-        if direction=="SHORT" and funding<-0.01: return None
-        boll_range=last5["boll_upper"]-last5["boll_lower"]
-        boll_pos=0.5
-        if boll_range>0:
-            boll_pos=(last5["close"]-last5["boll_lower"])/boll_range
-            if direction=="LONG" and boll_pos>0.6: return None
-            if direction=="SHORT" and boll_pos<0.4: return None
-        score=70
-        if vol_ratio>=1.5: score+=5
-        if vol_ratio>=1.8: score+=7
-        if vol_ratio>=2.2: score+=5
-        if abs(momentum)>=1.0: score+=5
-        if abs(momentum)>=1.5: score+=5
-        if score<85: return None
-        if 85<=score<=89 and vol_ratio<1.8: return None
-        lev="5x CRASH" if score>=95 else ("5x MEDIUM" if score>=93 else "3x LOW")
-        atr=last1h["atr"] if pd.notna(last1h["atr"]) else last1h["close"]*0.02
-        return {"symbol":symbol,"direction":direction,"score":score,"vol_ratio":round(vol_ratio,2),
-                "momentum":round(momentum,2),"funding":funding,"boll_pos":round(boll_pos,2),
-                "rsi":round(last1h["rsi"],1),"price":last1h["close"],"atr":atr,"lev":lev}
-    except: return None
+        df['ema7'] = df['close'].ewm(span=7, adjust=False).mean()
+        df['ema25'] = df['close'].ewm(span=25, adjust=False).mean()
+        df['ema99'] = df['close'].ewm(span=99, adjust=False).mean()
+        df['sma200'] = df['close'].rolling(200).mean()
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        ema12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema26 = df['close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = ema12 - ema26
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
+        df['atr'] = df['tr'].rolling(14).mean()
+        df['vol_avg'] = df['volume'].rolling(20).mean()
+        return df
+    except:
+        return None
+
+def get_btc_trend():
+    try:
+        df_1h_raw = get_ohlcv('BTC/USDT', '1h', 120)
+        if df_1h_raw is None or len(df_1h_raw) < 50:
+            return "NORMAL", False, 0
+        df_1h = calc_indicators(df_1h_raw)
+        if df_1h is None or len(df_1h) < 50:
+            return "NORMAL", False, 0
+        last = df_1h.iloc[-1]
+
+        df_4h_raw = get_ohlcv('BTC/USDT', '4h', 50)
+        if df_4h_raw is None:
+            return "BULLISH" if last['ema7'] > last['ema25'] else "NORMAL", False, 0
+        df_4h = calc_indicators(df_4h_raw)
+        if df_4h is None:
+            return "NORMAL", False, 0
+        last_4h = df_4h.iloc[-1]
+
+        atr_pct = (last['atr'] / last['close']) * 100 if last['atr'] else 0
+        # FIXED: was 0.8% (too sensitive), now 2% as you wanted
+        is_volatile = atr_pct > 2.0
+        change_24h = ((last['close'] - df_1h.iloc[-25]['close']) / df_1h.iloc[-25]['close']) * 100 if len(df_1h) > 25 else 0
+
+        if last_4h['ema7'] < last_4h['ema25'] and change_24h < -3:
+            return "BEARISH_SLOW_DROP", is_volatile, change_24h
+        if last['ema7'] > last['ema25'] and last['close'] > last['sma200']:
+            return "BULLISH", is_volatile, change_24h
+        if last['ema7'] < last['ema25'] and last['close'] < last['sma200']:
+            return "BEARISH", is_volatile, change_24h
+        return "NORMAL", is_volatile, change_24h
+    except Exception as e:
+        print(f"BTC trend error: {e}")
+        return "NORMAL", False, 0
+
+def analyze_coin(symbol, btc_trend, btc_volatile):
+    try:
+        ticker = exchange.fetch_ticker(symbol)
+        spread = ((ticker['ask'] - ticker['bid']) / ticker['bid']) * 100 if ticker['bid'] else 999
+        if spread > 0.15:
+            print(f"{symbol} REJECT spread {spread:.3f}%")
+            return None
+        change_24h = ticker['percentage'] if ticker['percentage'] else 0
+        if abs(change_24h) < 3:
+            return None
+
+        df_5m = calc_indicators(get_ohlcv(symbol, '5m', 120))
+        df_15m = calc_indicators(get_ohlcv(symbol, '15m', 120))
+        df_1h = calc_indicators(get_ohlcv(symbol, '1h', 120))
+        if df_5m is None or df_15m is None or df_1h is None:
+            return None
+
+        c1h = df_1h.iloc[-1]
+        momentum = ((c1h['close'] - df_1h.iloc[-2]['close']) / df_1h.iloc[-2]['close']) * 100
+        if abs(momentum) < 0.5:
+            return None
+
+        # === NEW: CRASH MODE - Filter #15 ===
+        # Catches INJ -100% / BTC 67k->63k type moves
+        is_crash_short = change_24h <= -12 or momentum <= -3.0
+        is_crash_long = change_24h >= 12 or momentum >= 3.0
+        is_crash = is_crash_short or is_crash_long
+        if is_crash:
+            print(f"{symbol} CRASH MODE ON: 24h {change_24h:.1f}% Mom {momentum:.2f}%")
+
+        ema_dist = abs((c1h['close'] - c1h['ema7']) / c1h['ema7']) * 100
+        # BYPASS EMA DISTANCE IN CRASH MODE
+        if not is_crash and ema_dist > 3.5:
+            print(f"{symbol} REJECT ema_dist {ema_dist:.2f}%")
+            return None
+
+        long_stack = c1h['ema7'] > c1h['ema25'] > c1h['ema99']
+        short_stack = c1h['ema7'] < c1h['ema25'] < c1h['ema99']
+        direction = None
+        if long_stack and c1h['close'] > c1h['sma200']:
+            direction = "LONG"
+        elif short_stack and c1h['close'] < c1h['sma200']:
+            direction = "SHORT"
+        else:
+            # In crash, allow direction even if SMA200 not perfect, use EMA stack only
+            if is_crash:
+                if long_stack: direction = "LONG"
+                elif short_stack: direction = "SHORT"
+                else: return None
+            else:
+                return None
+
+        # If crash direction mismatches 24h, force it
+        if is_crash_short: direction = "SHORT"
+        if is_crash_long: direction = "LONG"
+
+        def tf_dir(df):
+            last = df.iloc[-1]
+            return "LONG" if last['ema7'] > last['ema25'] else "SHORT" if last['ema7'] < last['ema25'] else None
+
+        # In crash, only need 15m + 1h to align, ignore 5m (5m whipsaws in crash)
+        if is_crash:
+            if tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
+                print(f"{symbol} REJECT crash TF 15m/1h mismatch")
+                return None
+        else:
+            if tf_dir(df_5m) != direction or tf_dir(df_15m) != direction or tf_dir(df_1h) != direction:
+                return None
+
+        rsi = c1h['rsi']
+        # BYPASS RSI IN CRASH MODE - crash RSI is 5-10, normal filter would kill it
+        if not is_crash:
+            if direction == "LONG" and not (55 <= rsi <= 75): return None
+            if direction == "SHORT" and not (20 <= rsi <= 45): return None
+            if direction == "LONG" and not (c1h['macd'] > c1h['macd_signal'] and c1h['macd_hist'] > 0): return None
+            if direction == "SHORT" and not (c1h['macd'] < c1h['macd_signal'] and c1h['macd_hist'] < 0): return None
+        else:
+            # In crash, only check MACD direction, not RSI
+            if direction == "LONG" and not (c1h['macd_hist'] > 0): return None
+            if direction == "SHORT" and not (c1h['macd_hist'] < 0): return None
+
+        vol_ratio = c1h['volume'] / c1h['vol_avg'] if c1h['vol_avg'] else 0
+        if vol_ratio < 1.3: return None
+
+        # BYPASS BTC BLOCKS IN CRASH MODE
+        if not is_crash:
+            if btc_trend == "BEARISH_SLOW_DROP" and direction == "LONG": return None
+            if btc_volatile:
+                if btc_trend == "BULLISH" and direction == "SHORT": return None
+                if btc_trend == "BEARISH" and direction == "LONG": return None
+
+        # SCORE - Crash gets auto 95
+        if is_crash:
+            score = 95
+        else:
+            score = 70
+            if vol_ratio > 1.8: score += 10
+            elif vol_ratio > 1.5: score += 5
+            if abs(momentum) > 1.5: score += 10
+            elif abs(momentum) > 1.0: score += 5
+            if direction == "LONG" and 60 <= rsi <= 70: score += 5
+            if direction == "SHORT" and 25 <= rsi <= 40: score += 5
+            if score > 100: score = 100
+            if score < 90: return None
+
+        # DYNAMIC LEVERAGE - Crash mode uses 5x max for safety, not 20x
+        if is_crash:
+            lev, certainty = 5, "CRASH MODE"
+        elif score >= 98:
+            lev, certainty = 20, "VERY HIGH"
+        elif score >= 96:
+            lev, certainty = 10, "HIGH"
+        elif score >= 93:
+            lev, certainty = 5, "MEDIUM"
+        else:
+            lev, certainty = 3, "LOW"
+
+        atr, price = c1h['atr'], c1h['close']
+        sl, tp = (price - atr*1.5, price + atr*3) if direction == "LONG" else (price + atr*1.5, price - atr*3)
+
+        return {'symbol':symbol,'direction':direction,'price':price,'sl':sl,'tp':tp,'score':score,'lev':lev,'certainty':certainty,'rsi':rsi,'vol_ratio':vol_ratio,'momentum':momentum,'is_crash':is_crash}
+    except Exception as e:
+        print(f"Analyze error {symbol}: {e}")
+        return None
 
 def main():
-    start=time.time()
+    print("Bot started...")
+    btc_trend, btc_volatile, btc_change = get_btc_trend()
+    print(f"BTC Trend: {btc_trend} Volatile: {btc_volatile} Change: {btc_change:.2f}%")
     try:
-        exchange=ccxt.okx({"enableRateLimit":True, "options":{"defaultType":"swap"}})
-        exchange.load_markets()
-        tickers=exchange.fetch_tickers()
-        def get_vol(t): return t.get("quoteVolume") or t.get("baseVolume") or t.get("volume") or 0
-        usdt_perps={s:t for s,t in tickers.items() if ":USDT" in s and "BTC" not in s and get_vol(t)>0}
-        sorted_syms=sorted(usdt_perps.items(), key=lambda x: get_vol(x[1]), reverse=True)
-        symbols=[s for s,_ in sorted_syms[:80]]
-        btc_trend=get_btc_trend(exchange)
-        
-        # ALWAYS SEND ALIVE
-        send_telegram(f"✅ BOT ALIVE - v2.5 OKX | BTC {btc_trend} | Found {len(usdt_perps)} perps, scanning top {len(symbols)} | {time.strftime('%H:%M WAT')}")
-
-        results=[]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            futures={executor.submit(analyze_coin,exchange,sym,btc_trend): sym for sym in symbols}
-            for fut in concurrent.futures.as_completed(futures):
-                r=fut.result()
-                if r: results.append(r)
-        results=sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-        
-        if results:
-            for r in results:
-                sl=r["price"]-r["atr"]*1.5 if r["direction"]=="LONG" else r["price"]+r["atr"]*1.5
-                tp=r["price"]+r["atr"]*3 if r["direction"]=="LONG" else r["price"]-r["atr"]*3
-                msg=(f"🚀 SIGNAL {r['direction']} {r['symbol']}\n"
-                     f"Score:{r['score']} Vol:{r['vol_ratio']}x Mom:{r['momentum']}%\n"
-                     f"RSI:{r['rsi']} BOLL:{r['boll_pos']} Funding:{r['funding']*100:.4f}%\n"
-                     f"Price:{r['price']}\nSL:{sl:.4f} TP:{tp:.4f}\nLev:{r['lev']} BTC:{btc_trend}")
-                send_telegram(msg)
-        else:
-            # SEND 0 SIGNAL MESSAGE TOO - so you know bot is alive
-            send_telegram(f"⏸️ No genuine signal - scanned {len(symbols)} coins in {time.time()-start:.1f}s | BTC {btc_trend} | Market flat, no 1.5x setup")
-
-        print(f"OKX found {len(usdt_perps)} perps, scanning top {len(symbols)}")
-        print(f"Done {len(results)} signals in {time.time()-start:.1f}s using OKX - scanned {len(symbols)}")
+        tickers = exchange.fetch_tickers()
+        pairs = [(s, t['quoteVolume']) for s, t in tickers.items() if s.endswith('/USDT') and ':USDT' not in s and t.get('quoteVolume')]
+        pairs.sort(key=lambda x: x[1], reverse=True)
+        top_coins = [s for s, v in pairs[:80]]
     except Exception as e:
-        print(traceback.format_exc())
-        send_telegram(f"❌ BOT ERROR OKX: {str(e)[:300]}")
+        print(f"Ticker error: {e}")
+        top_coins = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','DOGE/USDT']
 
-if __name__=="__main__": main()
+    signals = []
+    for sym in top_coins:
+        if sym == 'BTC/USDT': continue
+        res = analyze_coin(sym, btc_trend, btc_volatile)
+        if res: signals.append(res)
+        time.sleep(0.2)
+
+    signals.sort(key=lambda x: x['score'], reverse=True)
+    signals = signals[:3]
+    utc_hour = datetime.now(timezone.utc).hour
+
+    if signals:
+        for s in signals:
+            crash_tag = " 🔥 CRASH" if s.get('is_crash') else ""
+            msg = f"""🚀 SIGNAL {s['direction']} {s['symbol']}{crash_tag}
+
+💰 Entry: {s['price']:.6f}
+🛑 SL: {s['sl']:.6f}
+🎯 TP: {s['tp']:.6f}
+
+⚡ Leverage: {s['lev']}x ({s['certainty']} - Score {s['score']})
+📊 RSI: {s['rsi']:.1f} | Vol: {s['vol_ratio']:.2f}x | Mom: {s['momentum']:.2f}%
+🧠 BTC: {btc_trend}
+⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"""
+            send_telegram(msg)
+    else:
+        print("No signals - all filtered")
+        if utc_hour % 4 == 0 or True:
+            msg = f"""✅ BOT ALIVE
+
+🧠 BTC Trend: {btc_trend} ({btc_change:.2f}%)
+🔍 Scanned 80 coins - No signals, all filtered
+⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}
+Bot is running normally."""
+            send_telegram(msg)
+
+if __name__ == "__main__":
+    main()
