@@ -125,8 +125,8 @@ def analyze_coin(symbol, btc_trend, btc_volatile):
         bv = ticker.get('baseVolume') or 0
         price_t = ticker.get('last') or ticker.get('close') or 0
         vol_usd = qv if qv else (bv * price_t if bv and price_t else 0)
-        if vol_usd < 5000000:
-            print(f"{symbol} REJECT vol ${vol_usd:,.0f} < $5M")
+        if vol_usd < 1000000:
+            print(f"{symbol} REJECT vol ${vol_usd:,.0f} < $1M")
             return None
 
         change_24h = ticker['percentage'] if ticker['percentage'] else 0
